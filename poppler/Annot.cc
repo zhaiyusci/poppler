@@ -73,7 +73,9 @@
 #include <cstdlib>
 #include <cmath>
 #include <cassert>
+#include <map>
 #include <numbers>
+#include <vector>
 #include "goo/gstrtod.h"
 #include "Error.h"
 #include "Object.h"
@@ -117,6 +119,125 @@
 // TODO uncomment when we can depend on C++26
 // constexpr double bezierCircle = (4 * (sqrt(2) - 1) / 3);
 constexpr double bezierCircle = 0.55228475;
+
+namespace {
+
+bool shouldSkipDecodedStreamDictKey(std::string_view key)
+{
+    return key == "Length" || key == "Filter" || key == "DecodeParms" || key == "F" || key == "FFilter" || key == "FDecodeParms" || key == "DL";
+}
+
+bool readDecodedStreamData(Object *streamObj, std::vector<char> *data)
+{
+    if (!streamObj->streamRewind()) {
+        return false;
+    }
+
+    unsigned char buffer[4096];
+    while (true) {
+        const int bytesRead = streamObj->streamGetChars(sizeof(buffer), buffer);
+        if (bytesRead <= 0) {
+            break;
+        }
+        data->insert(data->end(), reinterpret_cast<char *>(buffer), reinterpret_cast<char *>(buffer) + bytesRead);
+    }
+    streamObj->streamClose();
+    return true;
+}
+
+Object copyObjectToXRef(const Object &srcObj, XRef *srcXRef, XRef *destXRef, std::map<Ref, Ref> &copiedRefs, int depth = 0)
+{
+    if (depth > 256) {
+        return Object::null();
+    }
+
+    if (srcObj.isRef()) {
+        const Ref srcRef = srcObj.getRef();
+        const auto it = copiedRefs.find(srcRef);
+        if (it != copiedRefs.end()) {
+            return Object(it->second);
+        }
+
+        Object fetched = srcObj.fetch(srcXRef);
+        if (fetched.isNull() || fetched.isError()) {
+            return Object::null();
+        }
+
+        Object copied = copyObjectToXRef(fetched, srcXRef, destXRef, copiedRefs, depth + 1);
+        if (copied.isNull()) {
+            return Object::null();
+        }
+
+        const Ref destRef = destXRef->addIndirectObject(copied);
+        copiedRefs[srcRef] = destRef;
+        return Object(destRef);
+    }
+
+    if (srcObj.isArray()) {
+        auto *array = new Array(destXRef);
+        for (int i = 0; i < srcObj.arrayGetLength(); ++i) {
+            array->add(copyObjectToXRef(srcObj.arrayGetNF(i), srcXRef, destXRef, copiedRefs, depth + 1));
+        }
+        return Object(array);
+    }
+
+    if (srcObj.isDict()) {
+        auto *dict = new Dict(destXRef);
+        for (int i = 0; i < srcObj.dictGetLength(); ++i) {
+            dict->set(srcObj.dictGetKey(i), copyObjectToXRef(srcObj.dictGetValNF(i), srcXRef, destXRef, copiedRefs, depth + 1));
+        }
+        return Object(dict);
+    }
+
+    if (srcObj.isStream()) {
+        Object streamObj = srcObj.copy();
+        std::vector<char> data;
+        if (!readDecodedStreamData(&streamObj, &data)) {
+            return Object::null();
+        }
+
+        auto *dict = new Dict(destXRef);
+        Dict *srcDict = streamObj.streamGetDict();
+        for (int i = 0; i < srcDict->getLength(); ++i) {
+            const char *key = srcDict->getKey(i);
+            if (shouldSkipDecodedStreamDictKey(key)) {
+                continue;
+            }
+            dict->set(key, copyObjectToXRef(srcDict->getValNF(i), srcXRef, destXRef, copiedRefs, depth + 1));
+        }
+        dict->set("Length", Object(static_cast<int>(data.size())));
+
+        auto dataStream = std::make_unique<AutoFreeMemStream>(std::move(data), Object(dict));
+        return Object(std::move(dataStream));
+    }
+
+    return srcObj.copy();
+}
+
+bool appendPageContent(Object contentsObj, XRef *srcXRef, std::vector<char> *data)
+{
+    if (contentsObj.isRef()) {
+        return appendPageContent(contentsObj.fetch(srcXRef), srcXRef, data);
+    }
+
+    if (contentsObj.isArray()) {
+        for (int i = 0; i < contentsObj.arrayGetLength(); ++i) {
+            if (!appendPageContent(contentsObj.arrayGetNF(i).copy(), srcXRef, data)) {
+                return false;
+            }
+            data->push_back('\n');
+        }
+        return true;
+    }
+
+    if (!contentsObj.isStream()) {
+        return false;
+    }
+
+    return readDecodedStreamData(&contentsObj, data);
+}
+
+}
 
 static AnnotLineEndingStyle parseAnnotLineEndingStyle(const Object &name)
 {
@@ -6018,6 +6139,73 @@ void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampIm
     // Regenerate appearance stream
     invalidateAppearance();
     updateAppearanceResDict();
+}
+
+bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber)
+{
+    if (pdfFileName.empty() || pageNumber < 1) {
+        return false;
+    }
+
+    annotLocker();
+
+    PDFDoc sourceDoc(std::make_unique<GooString>(pdfFileName.c_str()));
+    if (!sourceDoc.isOk() || pageNumber > sourceDoc.getNumPages()) {
+        return false;
+    }
+
+    Page *sourcePage = sourceDoc.getPage(pageNumber);
+    if (!sourcePage || !sourcePage->isOk()) {
+        return false;
+    }
+
+    std::vector<char> contentBytes;
+    if (!appendPageContent(sourcePage->getContents(), sourceDoc.getXRef(), &contentBytes)) {
+        return false;
+    }
+
+    const PDFRectangle *sourceBox = sourcePage->isCropped() ? sourcePage->getCropBox() : sourcePage->getMediaBox();
+    const double sourceWidth = sourceBox->x2 - sourceBox->x1;
+    const double sourceHeight = sourceBox->y2 - sourceBox->y1;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
+    std::map<Ref, Ref> copiedRefs;
+    Object resources;
+    Object *sourceResources = sourcePage->getResourceDictObject();
+    if (sourceResources && !sourceResources->isNull()) {
+        Object sourceResourcesObject = sourceResources->isRef() ? sourceResources->fetch(sourceDoc.getXRef()) : sourceResources->copy();
+        resources = copyObjectToXRef(sourceResourcesObject, sourceDoc.getXRef(), doc->getXRef(), copiedRefs);
+    } else {
+        resources = Object(new Dict(doc->getXRef()));
+    }
+    if (!resources.isDict()) {
+        resources = Object(new Dict(doc->getXRef()));
+    }
+
+    GooString innerContent;
+    innerContent.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n", -sourceBox->x1, -sourceBox->y1);
+    innerContent.append(contentBytes.data(), contentBytes.size());
+    innerContent.append("\nQ\n");
+
+    const std::array<double, 4> bboxArray = { 0, 0, sourceWidth, sourceHeight };
+    Object innerForm = createForm(&innerContent, bboxArray, false, std::move(resources));
+    const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
+
+    AnnotAppearanceBuilder appearanceBuilder;
+    appearanceBuilder.append("/GS0 gs\n/Fm0 Do");
+    Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
+    Object newAppearance = createForm(appearanceBuilder.buffer(), bboxArray, false, resDict);
+
+    setNewAppearance(std::move(newAppearance));
+
+    if (stampImageHelper) {
+        stampImageHelper->removeAnnotStampImageObject();
+        stampImageHelper.reset();
+    }
+
+    return true;
 }
 
 //------------------------------------------------------------------------

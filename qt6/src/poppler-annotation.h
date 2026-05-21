@@ -49,6 +49,8 @@
 
 #include <memory>
 
+#define POPPLER_QT6_HAS_STAMP_CUSTOM_PDF_APPEARANCE 1
+
 namespace Poppler {
 
 class Annotation;
@@ -781,6 +783,14 @@ public:
        \since 21.10.0
     */
     void setStampCustomImage(const QImage &image);
+
+    /**
+       Set a single PDF page as a custom vector appearance for this stamp annotation.
+
+       The page contents are embedded as the annotation appearance stream.
+       Page numbering starts at 1.
+    */
+    bool setStampCustomPdf(const QString &fileName, int page = 1);
 
 private:
     explicit StampAnnotation(StampAnnotationPrivate &dd);

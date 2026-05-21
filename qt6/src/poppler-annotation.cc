@@ -38,6 +38,7 @@
 #include <QtCore/QtAlgorithms>
 #include <QtGui/QColor>
 #include <QtGui/QTransform>
+#include <QFile>
 #include <QImage>
 
 // local includes
@@ -2690,6 +2691,8 @@ public:
     // data fields
     QString stampIconName;
     QImage stampCustomImage;
+    QString stampCustomPdfFileName;
+    int stampCustomPdfPage = 1;
 };
 
 StampAnnotationPrivate::StampAnnotationPrivate() : stampIconName(QStringLiteral("Draft")) { }
@@ -2714,9 +2717,14 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     // Set properties
     flushBaseAnnotationProperties();
     q->setStampIconName(stampIconName);
-    q->setStampCustomImage(stampCustomImage);
+    if (!stampCustomPdfFileName.isEmpty()) {
+        q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
+    } else {
+        q->setStampCustomImage(stampCustomImage);
+    }
 
     stampIconName.clear(); // Free up memory
+    stampCustomPdfFileName.clear(); // Free up memory
 
     return pdfAnnot;
 }
@@ -2858,12 +2866,33 @@ void StampAnnotation::setStampCustomImage(const QImage &image)
 
     if (!d->pdfAnnot) {
         d->stampCustomImage = QImage(image);
+        d->stampCustomPdfFileName.clear();
         return;
     }
 
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     std::unique_ptr<AnnotStampImageHelper> annotCustomImage = d->convertQImageToAnnotStampImageHelper(image);
     stampann->setCustomImage(std::move(annotCustomImage));
+}
+
+bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)
+{
+    if (fileName.isEmpty() || page < 1) {
+        return false;
+    }
+
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->stampCustomPdfFileName = fileName;
+        d->stampCustomPdfPage = page;
+        d->stampCustomImage = QImage();
+        return true;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    const QByteArray encodedFileName = QFile::encodeName(fileName);
+    return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
 }
 
 /** SignatureAnnotation [Annotation] */

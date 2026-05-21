@@ -59,6 +59,7 @@
 #include <array>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "AnnotStampImageHelper.h"
@@ -1230,6 +1231,7 @@ public:
     void setIcon(const std::string &new_icon);
 
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
+    bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
 
     // getters
     const std::string &getIcon() const { return icon; }
