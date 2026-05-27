@@ -41,6 +41,8 @@
 #include <QFile>
 #include <QImage>
 
+#include <cmath>
+
 // local includes
 #include "CryptoSignBackend.h"
 #include "poppler-annotation.h"
@@ -2693,6 +2695,8 @@ public:
     QImage stampCustomImage;
     QString stampCustomPdfFileName;
     int stampCustomPdfPage = 1;
+    double okularLatexNoteScale = 1.0;
+    double okularLatexNoteLayoutWidth = 0.0;
 };
 
 StampAnnotationPrivate::StampAnnotationPrivate() : stampIconName(QStringLiteral("Draft")) { }
@@ -2717,6 +2721,8 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     // Set properties
     flushBaseAnnotationProperties();
     q->setStampIconName(stampIconName);
+    q->setOkularLatexNoteScale(okularLatexNoteScale);
+    q->setOkularLatexNoteLayoutWidth(okularLatexNoteLayoutWidth);
     if (!stampCustomPdfFileName.isEmpty()) {
         q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
     } else {
@@ -2893,6 +2899,64 @@ bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     const QByteArray encodedFileName = QFile::encodeName(fileName);
     return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
+}
+
+double StampAnnotation::okularLatexNoteScale() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexNoteScale;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatexNoteScale();
+}
+
+void StampAnnotation::setOkularLatexNoteScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->okularLatexNoteScale = scale;
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexNoteScale(scale);
+}
+
+double StampAnnotation::okularLatexNoteLayoutWidth() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexNoteLayoutWidth;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatexNoteLayoutWidth();
+}
+
+void StampAnnotation::setOkularLatexNoteLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->okularLatexNoteLayoutWidth = width;
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexNoteLayoutWidth(width);
 }
 
 /** SignatureAnnotation [Annotation] */

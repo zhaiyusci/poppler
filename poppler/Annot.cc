@@ -6123,6 +6123,34 @@ void AnnotStamp::setIcon(const std::string &new_icon)
     invalidateAppearance();
 }
 
+void AnnotStamp::setOkularLatexNoteScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    update("OkularLatexNoteScale", Object(scale));
+}
+
+void AnnotStamp::setOkularLatexNoteLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    update("OkularLatexNoteLayoutWidth", Object(width));
+}
+
+double AnnotStamp::getOkularLatexNoteScale() const
+{
+    return annotObj.dictLookup("OkularLatexNoteScale").getNumWithDefaultValue(1.0);
+}
+
+double AnnotStamp::getOkularLatexNoteLayoutWidth() const
+{
+    return annotObj.dictLookup("OkularLatexNoteLayoutWidth").getNumWithDefaultValue(0.0);
+}
+
 void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
 {
     if (!stampImageHelperA) {

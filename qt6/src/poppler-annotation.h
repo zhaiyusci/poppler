@@ -50,6 +50,7 @@
 #include <memory>
 
 #define POPPLER_QT6_HAS_STAMP_CUSTOM_PDF_APPEARANCE 1
+#define POPPLER_QT6_HAS_OKULAR_LATEX_NOTE_METADATA 1
 
 namespace Poppler {
 
@@ -791,6 +792,11 @@ public:
        Page numbering starts at 1.
     */
     bool setStampCustomPdf(const QString &fileName, int page = 1);
+
+    double okularLatexNoteScale() const;
+    void setOkularLatexNoteScale(double scale);
+    double okularLatexNoteLayoutWidth() const;
+    void setOkularLatexNoteLayoutWidth(double width);
 
 private:
     explicit StampAnnotation(StampAnnotationPrivate &dd);

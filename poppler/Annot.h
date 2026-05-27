@@ -1233,8 +1233,13 @@ public:
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
 
+    void setOkularLatexNoteScale(double scale);
+    void setOkularLatexNoteLayoutWidth(double width);
+
     // getters
     const std::string &getIcon() const { return icon; }
+    double getOkularLatexNoteScale() const;
+    double getOkularLatexNoteLayoutWidth() const;
 
     Object getAppearanceResDict() override;
 
