@@ -374,13 +374,15 @@ endif()
 # Recent versions of poppler-data install a .pc file.
 # Use it to determine the encoding data path, if available.
 # Default to the same prefix otherwise.
-pkg_check_modules(POPPLER_DATA poppler-data)
-if(POPPLER_DATA_FOUND)
-  execute_process(COMMAND "${PKG_CONFIG_EXECUTABLE}" --variable=poppler_datadir poppler-data
-                  RESULT_VARIABLE _result_var
-                  OUTPUT_VARIABLE _output_var OUTPUT_STRIP_TRAILING_WHITESPACE)
-  if(_result_var STREQUAL "0" AND NOT _output_var STREQUAL "")
-    set(POPPLER_DATADIR "${_output_var}")
+if(NOT DEFINED POPPLER_DATADIR)
+  pkg_check_modules(POPPLER_DATA poppler-data)
+  if(POPPLER_DATA_FOUND)
+    execute_process(COMMAND "${PKG_CONFIG_EXECUTABLE}" --variable=poppler_datadir poppler-data
+                    RESULT_VARIABLE _result_var
+                    OUTPUT_VARIABLE _output_var OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(_result_var STREQUAL "0" AND NOT _output_var STREQUAL "")
+      set(POPPLER_DATADIR "${_output_var}")
+    endif()
   endif()
 endif()
 if(NOT DEFINED POPPLER_DATADIR)

@@ -59,6 +59,7 @@
 #include <config.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
@@ -189,6 +190,17 @@ static const char *get_poppler_fontsdir(void)
 #else
 #    define POPPLER_FONTSDIR nullptr
 #endif
+
+static std::string getPopplerDataDir()
+{
+    if (const char *dataDir = std::getenv("POPPLER_DATADIR")) {
+        if (dataDir[0] != '\0') {
+            return dataDir;
+        }
+    }
+
+    return POPPLER_DATADIR;
+}
 
 //------------------------------------------------------------------------
 // SysFontInfo
@@ -460,7 +472,7 @@ GlobalParams::GlobalParams(std::string customPopplerDataDir) : popplerDataDir(st
 
 void GlobalParams::scanEncodingDirs()
 {
-    std::string dataRoot = !popplerDataDir.empty() ? popplerDataDir : std::string { POPPLER_DATADIR };
+    std::string dataRoot = !popplerDataDir.empty() ? popplerDataDir : getPopplerDataDir();
 
     std::error_code ec; // if ec is set, we also get the end iterator, so that's kind of okay.  If not creating with a error code, we get an exception if poppler data is missing
     for (const auto &entry : std::filesystem::directory_iterator { dataRoot + "/nameToUnicode", ec }) {
