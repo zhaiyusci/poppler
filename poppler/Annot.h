@@ -1235,11 +1235,13 @@ public:
 
     void setOkularLatexNoteScale(double scale);
     void setOkularLatexNoteLayoutWidth(double width);
+    void setOkularLatexNoteBoxed(bool boxed);
 
     // getters
     const std::string &getIcon() const { return icon; }
     double getOkularLatexNoteScale() const;
     double getOkularLatexNoteLayoutWidth() const;
+    bool getOkularLatexNoteBoxed() const;
 
     Object getAppearanceResDict() override;
 

@@ -797,6 +797,8 @@ public:
     void setOkularLatexNoteScale(double scale);
     double okularLatexNoteLayoutWidth() const;
     void setOkularLatexNoteLayoutWidth(double width);
+    bool okularLatexNoteBoxed() const;
+    void setOkularLatexNoteBoxed(bool boxed);
 
 private:
     explicit StampAnnotation(StampAnnotationPrivate &dd);

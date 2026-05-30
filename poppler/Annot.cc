@@ -6141,6 +6141,11 @@ void AnnotStamp::setOkularLatexNoteLayoutWidth(double width)
     update("OkularLatexNoteLayoutWidth", Object(width));
 }
 
+void AnnotStamp::setOkularLatexNoteBoxed(bool boxed)
+{
+    update("OkularLatexNoteBoxed", Object(boxed));
+}
+
 double AnnotStamp::getOkularLatexNoteScale() const
 {
     return annotObj.dictLookup("OkularLatexNoteScale").getNumWithDefaultValue(1.0);
@@ -6149,6 +6154,11 @@ double AnnotStamp::getOkularLatexNoteScale() const
 double AnnotStamp::getOkularLatexNoteLayoutWidth() const
 {
     return annotObj.dictLookup("OkularLatexNoteLayoutWidth").getNumWithDefaultValue(0.0);
+}
+
+bool AnnotStamp::getOkularLatexNoteBoxed() const
+{
+    return annotObj.dictLookup("OkularLatexNoteBoxed").getBoolWithDefaultValue(false);
 }
 
 void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
@@ -6222,7 +6232,20 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
     AnnotAppearanceBuilder appearanceBuilder;
-    appearanceBuilder.append("/GS0 gs\n/Fm0 Do");
+    appearanceBuilder.append("/GS0 gs\n");
+    if (getOkularLatexNoteBoxed()) {
+        constexpr double okularLatexBoxFrameWidth = 6.0;
+        const double layoutWidth = getOkularLatexNoteLayoutWidth();
+        const double requestedFrameWidth = std::isfinite(layoutWidth) && layoutWidth > 0.0 ? layoutWidth + okularLatexBoxFrameWidth : sourceWidth;
+        const double frameWidth = std::min(sourceWidth, std::max(1.0, requestedFrameWidth));
+        appearanceBuilder.append("q\n");
+        appearanceBuilder.appendf("1 1 0 rg\n0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, sourceHeight);
+        if (frameWidth > 1.0 && sourceHeight > 1.0) {
+            appearanceBuilder.appendf("0 0 0 RG\n1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, sourceHeight - 1.0);
+        }
+        appearanceBuilder.append("Q\n");
+    }
+    appearanceBuilder.append("/Fm0 Do");
     Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
     Object newAppearance = createForm(appearanceBuilder.buffer(), bboxArray, false, resDict);
 

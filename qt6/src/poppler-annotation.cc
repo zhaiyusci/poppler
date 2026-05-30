@@ -2697,6 +2697,7 @@ public:
     int stampCustomPdfPage = 1;
     double okularLatexNoteScale = 1.0;
     double okularLatexNoteLayoutWidth = 0.0;
+    bool okularLatexNoteBoxed = false;
 };
 
 StampAnnotationPrivate::StampAnnotationPrivate() : stampIconName(QStringLiteral("Draft")) { }
@@ -2723,6 +2724,7 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     q->setStampIconName(stampIconName);
     q->setOkularLatexNoteScale(okularLatexNoteScale);
     q->setOkularLatexNoteLayoutWidth(okularLatexNoteLayoutWidth);
+    q->setOkularLatexNoteBoxed(okularLatexNoteBoxed);
     if (!stampCustomPdfFileName.isEmpty()) {
         q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
     } else {
@@ -2957,6 +2959,31 @@ void StampAnnotation::setOkularLatexNoteLayoutWidth(double width)
 
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     stampann->setOkularLatexNoteLayoutWidth(width);
+}
+
+bool StampAnnotation::okularLatexNoteBoxed() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexNoteBoxed;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatexNoteBoxed();
+}
+
+void StampAnnotation::setOkularLatexNoteBoxed(bool boxed)
+{
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->okularLatexNoteBoxed = boxed;
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexNoteBoxed(boxed);
 }
 
 /** SignatureAnnotation [Annotation] */
