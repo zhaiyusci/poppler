@@ -6227,27 +6227,44 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     innerContent.append(contentBytes.data(), contentBytes.size());
     innerContent.append("\nQ\n");
 
-    const std::array<double, 4> bboxArray = { 0, 0, sourceWidth, sourceHeight };
-    Object innerForm = createForm(&innerContent, bboxArray, false, std::move(resources));
+    const std::array<double, 4> innerBBoxArray = { 0, 0, sourceWidth, sourceHeight };
+    Object innerForm = createForm(&innerContent, innerBBoxArray, false, std::move(resources));
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
+    constexpr double okularLatexBoxFrameInset = 3.0;
+    const bool boxedLatexNote = getOkularLatexNoteBoxed();
+    double outerWidth = sourceWidth;
+    double outerHeight = sourceHeight;
+    double contentOffsetX = 0.0;
+    double contentOffsetY = 0.0;
+    double frameWidth = sourceWidth;
+    if (boxedLatexNote) {
+        const double layoutWidth = getOkularLatexNoteLayoutWidth();
+        frameWidth = std::isfinite(layoutWidth) && layoutWidth > 0.0 ? layoutWidth + 2.0 * okularLatexBoxFrameInset : sourceWidth + 2.0 * okularLatexBoxFrameInset;
+        outerWidth = std::max(frameWidth, sourceWidth + okularLatexBoxFrameInset);
+        outerHeight = sourceHeight + 2.0 * okularLatexBoxFrameInset;
+        contentOffsetX = okularLatexBoxFrameInset;
+        contentOffsetY = okularLatexBoxFrameInset;
+    }
+
+    const std::array<double, 4> outerBBoxArray = { 0, 0, outerWidth, outerHeight };
     AnnotAppearanceBuilder appearanceBuilder;
     appearanceBuilder.append("/GS0 gs\n");
-    if (getOkularLatexNoteBoxed()) {
-        constexpr double okularLatexBoxFrameWidth = 6.0;
-        const double layoutWidth = getOkularLatexNoteLayoutWidth();
-        const double requestedFrameWidth = std::isfinite(layoutWidth) && layoutWidth > 0.0 ? layoutWidth + okularLatexBoxFrameWidth : sourceWidth;
-        const double frameWidth = std::min(sourceWidth, std::max(1.0, requestedFrameWidth));
+    if (boxedLatexNote) {
         appearanceBuilder.append("q\n");
-        appearanceBuilder.appendf("1 1 0 rg\n0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, sourceHeight);
-        if (frameWidth > 1.0 && sourceHeight > 1.0) {
-            appearanceBuilder.appendf("0 0 0 RG\n1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, sourceHeight - 1.0);
+        appearanceBuilder.appendf("1 1 0 rg\n0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
+        if (frameWidth > 1.0 && outerHeight > 1.0) {
+            appearanceBuilder.appendf("0 0 0 RG\n1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
         }
         appearanceBuilder.append("Q\n");
     }
-    appearanceBuilder.append("/Fm0 Do");
+    if (contentOffsetX != 0.0 || contentOffsetY != 0.0) {
+        appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ", contentOffsetX, contentOffsetY);
+    } else {
+        appearanceBuilder.append("/Fm0 Do");
+    }
     Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
-    Object newAppearance = createForm(appearanceBuilder.buffer(), bboxArray, false, resDict);
+    Object newAppearance = createForm(appearanceBuilder.buffer(), outerBBoxArray, false, resDict);
 
     setNewAppearance(std::move(newAppearance));
 
