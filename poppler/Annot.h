@@ -1077,6 +1077,7 @@ public:
     void setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line);
     void setIntent(AnnotFreeTextIntent new_intent);
     void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
+    void setRectangle(const PDFRectangle &new_rectangle);
 
     // getters
     std::unique_ptr<DefaultAppearance> getDefaultAppearance() const;

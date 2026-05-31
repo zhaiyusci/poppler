@@ -543,6 +543,8 @@ public:
     void setTextColor(const QColor &color);
     QColor okularBorderColor() const;
     void setOkularBorderColor(const QColor &color);
+    QRectF okularInplaceBoundary() const;
+    void setOkularInplaceBoundary(const QRectF &boundary);
 
     InplaceAlignPosition inplaceAlign() const;
     void setInplaceAlign(InplaceAlignPosition align);

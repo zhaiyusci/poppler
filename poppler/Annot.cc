@@ -3219,6 +3219,20 @@ void AnnotFreeText::setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color
     invalidateAppearance();
 }
 
+void AnnotFreeText::setRectangle(const PDFRectangle &new_rectangle)
+{
+    rectangle = std::make_unique<PDFRectangle>(new_rectangle);
+
+    auto *rdArray = new Array(doc->getXRef());
+    rdArray->add(Object(rectangle->x1 - rect->x1));
+    rdArray->add(Object(rectangle->y1 - rect->y1));
+    rdArray->add(Object(rect->x2 - rectangle->x2));
+    rdArray->add(Object(rect->y2 - rectangle->y2));
+    update("RD", Object(rdArray));
+
+    invalidateAppearance();
+}
+
 std::unique_ptr<DefaultAppearance> AnnotFreeText::getDefaultAppearance() const
 {
     return std::make_unique<DefaultAppearance>(appearanceString.get());

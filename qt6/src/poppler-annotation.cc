@@ -1786,6 +1786,39 @@ void TextAnnotation::setOkularBorderColor(const QColor &color)
     }
 }
 
+QRectF TextAnnotation::okularInplaceBoundary() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->boundary;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
+        if (const PDFRectangle *rect = ftextann->getRectangle()) {
+            return d->fromPdfRectangle(*rect);
+        }
+    }
+
+    return boundary();
+}
+
+void TextAnnotation::setOkularInplaceBoundary(const QRectF &boundary)
+{
+    Q_D(TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->boundary = boundary;
+        return;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+        ftextann->setRectangle(d->boundaryToPdfRectangle(boundary, flags()));
+    }
+}
+
 TextAnnotation::InplaceAlignPosition TextAnnotation::inplaceAlign() const
 {
     Q_D(const TextAnnotation);
