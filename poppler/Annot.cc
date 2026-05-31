@@ -3137,8 +3137,18 @@ void AnnotFreeText::setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line)
         obj1.setToNull();
         calloutLine = nullptr;
     } else {
-        double x1 = line->getX1(), y1 = line->getY1();
-        double x2 = line->getX2(), y2 = line->getY2();
+        PDFRectangle textRect = *rect;
+        if (rectangle && rect->x1 <= rectangle->x1 && rect->y1 <= rectangle->y1 && rect->x2 >= rectangle->x2 && rect->y2 >= rectangle->y2
+            && (rect->x1 < rectangle->x1 || rect->y1 < rectangle->y1 || rect->x2 > rectangle->x2 || rect->y2 > rectangle->y2)) {
+            textRect = *rectangle;
+        }
+
+        const double x1 = line->getX1(), y1 = line->getY1();
+        const double x2 = line->getX2(), y2 = line->getY2();
+        double calloutMinX = std::min(x1, x2);
+        double calloutMinY = std::min(y1, y2);
+        double calloutMaxX = std::max(x1, x2);
+        double calloutMaxY = std::max(y1, y2);
         obj1 = Object(new Array(doc->getXRef()));
         obj1.arrayAdd(Object(x1));
         obj1.arrayAdd(Object(y1));
@@ -3150,6 +3160,31 @@ void AnnotFreeText::setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line)
             double x3 = mline->getX3(), y3 = mline->getY3();
             obj1.arrayAdd(Object(x3));
             obj1.arrayAdd(Object(y3));
+            calloutMinX = std::min(calloutMinX, x3);
+            calloutMinY = std::min(calloutMinY, y3);
+            calloutMaxX = std::max(calloutMaxX, x3);
+            calloutMaxY = std::max(calloutMaxY, y3);
+        }
+
+        const double margin = std::max(1.0, border ? border->getWidth() : 1.0) * 8.0;
+        PDFRectangle expandedRect;
+        expandedRect.x1 = std::min(textRect.x1, calloutMinX) - margin;
+        expandedRect.y1 = std::min(textRect.y1, calloutMinY) - margin;
+        expandedRect.x2 = std::max(textRect.x2, calloutMaxX) + margin;
+        expandedRect.y2 = std::max(textRect.y2, calloutMaxY) + margin;
+        setRect(expandedRect);
+
+        rectangle = std::make_unique<PDFRectangle>(textRect);
+        auto *rdArray = new Array(doc->getXRef());
+        rdArray->add(Object(rectangle->x1 - rect->x1));
+        rdArray->add(Object(rectangle->y1 - rect->y1));
+        rdArray->add(Object(rect->x2 - rectangle->x2));
+        rdArray->add(Object(rect->y2 - rectangle->y2));
+        update("RD", Object(rdArray));
+
+        if (endStyle == annotLineEndingNone) {
+            endStyle = annotLineEndingOpenArrow;
+            update("LE", Object(objName, convertAnnotLineEndingStyle(endStyle)));
         }
         calloutLine = std::move(line);
     }
@@ -3173,9 +3208,29 @@ void AnnotFreeText::setIntent(AnnotFreeTextIntent new_intent)
     update("IT", Object(objName, intentName));
 }
 
+void AnnotFreeText::setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color)
+{
+    if (new_color) {
+        Object obj1 = new_color->writeToObject(doc->getXRef());
+        update("OkularBorderColor", std::move(obj1));
+    } else {
+        update("OkularBorderColor", Object::null());
+    }
+    invalidateAppearance();
+}
+
 std::unique_ptr<DefaultAppearance> AnnotFreeText::getDefaultAppearance() const
 {
     return std::make_unique<DefaultAppearance>(appearanceString.get());
+}
+
+std::unique_ptr<AnnotColor> AnnotFreeText::getOkularBorderColor() const
+{
+    Object obj = annotObj.dictLookup("OkularBorderColor");
+    if (obj.isArray()) {
+        return std::make_unique<AnnotColor>(*obj.getArray());
+    }
+    return {};
 }
 
 static std::unique_ptr<GfxFont> createAnnotDrawFont(XRef *xref, Dict *fontParentDict, const char *resourceName = "AnnotDrawFont", const char *fontname = "Helvetica")
@@ -3438,6 +3493,11 @@ void AnnotFreeText::generateFreeTextAppearance()
     // Box size
     const double width = rect->x2 - rect->x1;
     const double height = rect->y2 - rect->y1;
+    const PDFRectangle *textRect = rectangle ? rectangle.get() : rect.get();
+    const double boxX = textRect->x1 - rect->x1;
+    const double boxY = textRect->y1 - rect->y1;
+    const double boxWidth = textRect->x2 - textRect->x1;
+    const double boxHeight = textRect->y2 - textRect->y1;
 
     // Parse some properties from the appearance string
     DefaultAppearance da { appearanceString.get() };
@@ -3456,14 +3516,54 @@ void AnnotFreeText::generateFreeTextAppearance()
         contents = std::make_unique<GooString>();
     }
 
+    const std::unique_ptr<AnnotColor> okularBorderColor = getOkularBorderColor();
+
+    // Draw callout leader before the box so the box fill clips the line at the edge.
+    if (intent == intentFreeTextCallout && calloutLine) {
+        if (!okularBorderColor || okularBorderColor->getSpace() != AnnotColor::colorTransparent) {
+            appearBuilder.setDrawColor(okularBorderColor ? *okularBorderColor : *da.getFontColor(), false);
+            if (borderWidth > 0) {
+                appearBuilder.setLineStyleForBorder(*border);
+            }
+
+            const double x1 = calloutLine->getX1() - rect->x1;
+            const double y1 = calloutLine->getY1() - rect->y1;
+            const double x2 = calloutLine->getX2() - rect->x1;
+            const double y2 = calloutLine->getY2() - rect->y1;
+            const auto *multiLine = dynamic_cast<const AnnotCalloutMultiLine *>(calloutLine.get());
+
+            appearBuilder.appendf("{0:.2f} {1:.2f} m\n{2:.2f} {3:.2f} l\n", x1, y1, x2, y2);
+            if (multiLine) {
+                appearBuilder.appendf("{0:.2f} {1:.2f} l\n", multiLine->getX3() - rect->x1, multiLine->getY3() - rect->y1);
+            }
+            appearBuilder.append("S\n");
+
+            if (endStyle != annotLineEndingNone) {
+                const double firstSegmentLength = std::hypot(x2 - x1, y2 - y1);
+                if (firstSegmentLength > 0) {
+                    Matrix matr;
+                    const double angle = atan2(y2 - y1, x2 - x1);
+                    matr.m[0] = matr.m[3] = cos(angle);
+                    matr.m[1] = sin(angle);
+                    matr.m[2] = -matr.m[1];
+                    matr.m[4] = x1;
+                    matr.m[5] = y1;
+
+                    const double lineEndingSize = std::min(std::max(6.0, 6.0 * borderWidth), firstSegmentLength / 2.0);
+                    appearBuilder.drawLineEnding(endStyle, 0, 0, -lineEndingSize, false, matr);
+                }
+            }
+        }
+    }
+
     // Draw box
     bool doFill = (color && color->getSpace() != AnnotColor::colorTransparent);
-    bool doStroke = (borderWidth != 0);
+    bool doStroke = (borderWidth != 0) && (!okularBorderColor || okularBorderColor->getSpace() != AnnotColor::colorTransparent);
     if (doFill || doStroke) {
         if (doStroke) {
-            appearBuilder.setDrawColor(*da.getFontColor(), false); // Border color: same as font color
+            appearBuilder.setDrawColor(okularBorderColor ? *okularBorderColor : *da.getFontColor(), false);
         }
-        appearBuilder.appendf("{0:.2f} {0:.2f} {1:.2f} {2:.2f} re\n", borderWidth / 2, width - borderWidth, height - borderWidth);
+        appearBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re\n", boxX + borderWidth / 2, boxY + borderWidth / 2, boxWidth - borderWidth, boxHeight - borderWidth);
         if (doFill) {
             appearBuilder.setDrawColor(*color, true);
             appearBuilder.append(doStroke ? "B\n" : "f\n");
@@ -3474,8 +3574,9 @@ void AnnotFreeText::generateFreeTextAppearance()
 
     // Setup text clipping
     const double textmargin = borderWidth * 2;
-    const double textwidth = width - 2 * textmargin;
-    appearBuilder.appendf("{0:.2f} {0:.2f} {1:.2f} {2:.2f} re W n\n", textmargin, textwidth, height - 2 * textmargin);
+    const double textwidth = std::max(0.0, boxWidth - 2 * textmargin);
+    const double textheight = std::max(0.0, boxHeight - 2 * textmargin);
+    appearBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re W n\n", boxX + textmargin, boxY + textmargin, textwidth, textheight);
 
     std::unique_ptr<const GfxFont> font = nullptr;
 
@@ -3513,7 +3614,7 @@ void AnnotFreeText::generateFreeTextAppearance()
 
     // Set font state
     appearBuilder.setDrawColor(*da.getFontColor(), true);
-    appearBuilder.appendf("BT 1 0 0 1 {0:.2f} {1:.2f} Tm\n", textmargin, height - textmargin);
+    appearBuilder.appendf("BT 1 0 0 1 {0:.2f} {1:.2f} Tm\n", boxX + textmargin, boxY + boxHeight - textmargin);
     const DrawMultiLineTextResult textCommands = drawMultiLineText(contents->toStr(), textwidth, form, *font, da.getFontName(), da.getFontPtSize(), quadding, 0 /*borderWidth*/);
     appearBuilder.append(textCommands.text.c_str());
     appearBuilder.append("ET Q\n");
@@ -6146,6 +6247,26 @@ void AnnotStamp::setOkularLatexNoteBoxed(bool boxed)
     update("OkularLatexNoteBoxed", Object(boxed));
 }
 
+void AnnotStamp::setOkularLatexNoteFillColor(std::unique_ptr<AnnotColor> &&color)
+{
+    if (color) {
+        Object obj = color->writeToObject(doc->getXRef());
+        update("OkularLatexNoteFillColor", std::move(obj));
+    } else {
+        update("OkularLatexNoteFillColor", Object::null());
+    }
+}
+
+void AnnotStamp::setOkularLatexNoteBorderColor(std::unique_ptr<AnnotColor> &&color)
+{
+    if (color) {
+        Object obj = color->writeToObject(doc->getXRef());
+        update("OkularLatexNoteBorderColor", std::move(obj));
+    } else {
+        update("OkularLatexNoteBorderColor", Object::null());
+    }
+}
+
 double AnnotStamp::getOkularLatexNoteScale() const
 {
     return annotObj.dictLookup("OkularLatexNoteScale").getNumWithDefaultValue(1.0);
@@ -6159,6 +6280,24 @@ double AnnotStamp::getOkularLatexNoteLayoutWidth() const
 bool AnnotStamp::getOkularLatexNoteBoxed() const
 {
     return annotObj.dictLookup("OkularLatexNoteBoxed").getBoolWithDefaultValue(false);
+}
+
+std::unique_ptr<AnnotColor> AnnotStamp::getOkularLatexNoteFillColor() const
+{
+    Object obj = annotObj.dictLookup("OkularLatexNoteFillColor");
+    if (obj.isArray()) {
+        return std::make_unique<AnnotColor>(*obj.getArray());
+    }
+    return {};
+}
+
+std::unique_ptr<AnnotColor> AnnotStamp::getOkularLatexNoteBorderColor() const
+{
+    Object obj = annotObj.dictLookup("OkularLatexNoteBorderColor");
+    if (obj.isArray()) {
+        return std::make_unique<AnnotColor>(*obj.getArray());
+    }
+    return {};
 }
 
 void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
@@ -6252,9 +6391,23 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     appearanceBuilder.append("/GS0 gs\n");
     if (boxedLatexNote) {
         appearanceBuilder.append("q\n");
-        appearanceBuilder.appendf("1 1 0 rg\n0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
+        std::unique_ptr<AnnotColor> fillColor = getOkularLatexNoteFillColor();
+        std::unique_ptr<AnnotColor> borderColor = getOkularLatexNoteBorderColor();
+        if (!fillColor) {
+            fillColor = std::make_unique<AnnotColor>(1, 1, 0);
+        }
+        if (!borderColor) {
+            borderColor = std::make_unique<AnnotColor>(0, 0, 0);
+        }
+        if (fillColor->getSpace() != AnnotColor::colorTransparent) {
+            appearanceBuilder.setDrawColor(*fillColor, true);
+            appearanceBuilder.appendf("0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
+        }
         if (frameWidth > 1.0 && outerHeight > 1.0) {
-            appearanceBuilder.appendf("0 0 0 RG\n1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
+            if (borderColor->getSpace() != AnnotColor::colorTransparent) {
+                appearanceBuilder.setDrawColor(*borderColor, false);
+                appearanceBuilder.appendf("1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
+            }
         }
         appearanceBuilder.append("Q\n");
     }

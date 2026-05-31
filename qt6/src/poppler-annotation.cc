@@ -824,6 +824,7 @@ public:
     QString textIcon;
     std::optional<QFont> textFont;
     QColor textColor = Qt::black;
+    QColor okularBorderColor;
     TextAnnotation::InplaceAlignPosition inplaceAlign = TextAnnotation::InplaceAlignLeft;
     QVector<QPointF> inplaceCallout;
     TextAnnotation::InplaceIntent inplaceIntent = TextAnnotation::Unknown;
@@ -1584,6 +1585,7 @@ std::shared_ptr<Annot> TextAnnotationPrivate::createNativeAnnot(::Page *destPage
     q->setInplaceAlign(inplaceAlign);
     q->setCalloutPoints(inplaceCallout);
     q->setInplaceIntent(inplaceIntent);
+    q->setOkularBorderColor(okularBorderColor);
 
     inplaceCallout.clear(); // Free up memory
 
@@ -1755,6 +1757,33 @@ void TextAnnotation::setTextColor(const QColor &color)
     d->textColor = color;
 
     d->setDefaultAppearanceToNative();
+}
+
+QColor TextAnnotation::okularBorderColor() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularBorderColor;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
+        return convertAnnotColor(ftextann->getOkularBorderColor().get());
+    }
+
+    return {};
+}
+
+void TextAnnotation::setOkularBorderColor(const QColor &color)
+{
+    Q_D(TextAnnotation);
+    d->okularBorderColor = color;
+
+    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
+        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+        ftextann->setOkularBorderColor(color.alpha() == 0 ? std::make_unique<AnnotColor>() : convertQColor(color));
+    }
 }
 
 TextAnnotation::InplaceAlignPosition TextAnnotation::inplaceAlign() const
@@ -2698,6 +2727,8 @@ public:
     double okularLatexNoteScale = 1.0;
     double okularLatexNoteLayoutWidth = 0.0;
     bool okularLatexNoteBoxed = false;
+    QColor okularLatexNoteFillColor;
+    QColor okularLatexNoteBorderColor;
 };
 
 StampAnnotationPrivate::StampAnnotationPrivate() : stampIconName(QStringLiteral("Draft")) { }
@@ -2725,6 +2756,8 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     q->setOkularLatexNoteScale(okularLatexNoteScale);
     q->setOkularLatexNoteLayoutWidth(okularLatexNoteLayoutWidth);
     q->setOkularLatexNoteBoxed(okularLatexNoteBoxed);
+    q->setOkularLatexNoteFillColor(okularLatexNoteFillColor);
+    q->setOkularLatexNoteBorderColor(okularLatexNoteBorderColor);
     if (!stampCustomPdfFileName.isEmpty()) {
         q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
     } else {
@@ -2984,6 +3017,56 @@ void StampAnnotation::setOkularLatexNoteBoxed(bool boxed)
 
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     stampann->setOkularLatexNoteBoxed(boxed);
+}
+
+QColor StampAnnotation::okularLatexNoteFillColor() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexNoteFillColor;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return convertAnnotColor(stampann->getOkularLatexNoteFillColor().get());
+}
+
+void StampAnnotation::setOkularLatexNoteFillColor(const QColor &color)
+{
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->okularLatexNoteFillColor = color;
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexNoteFillColor(color.alpha() == 0 ? std::make_unique<AnnotColor>() : convertQColor(color));
+}
+
+QColor StampAnnotation::okularLatexNoteBorderColor() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexNoteBorderColor;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return convertAnnotColor(stampann->getOkularLatexNoteBorderColor().get());
+}
+
+void StampAnnotation::setOkularLatexNoteBorderColor(const QColor &color)
+{
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->okularLatexNoteBorderColor = color;
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexNoteBorderColor(color.alpha() == 0 ? std::make_unique<AnnotColor>() : convertQColor(color));
 }
 
 /** SignatureAnnotation [Annotation] */

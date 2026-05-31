@@ -541,6 +541,8 @@ public:
     /// Default text color is black
     QColor textColor() const;
     void setTextColor(const QColor &color);
+    QColor okularBorderColor() const;
+    void setOkularBorderColor(const QColor &color);
 
     InplaceAlignPosition inplaceAlign() const;
     void setInplaceAlign(InplaceAlignPosition align);
@@ -799,6 +801,10 @@ public:
     void setOkularLatexNoteLayoutWidth(double width);
     bool okularLatexNoteBoxed() const;
     void setOkularLatexNoteBoxed(bool boxed);
+    QColor okularLatexNoteFillColor() const;
+    void setOkularLatexNoteFillColor(const QColor &color);
+    QColor okularLatexNoteBorderColor() const;
+    void setOkularLatexNoteBorderColor(const QColor &color);
 
 private:
     explicit StampAnnotation(StampAnnotationPrivate &dd);

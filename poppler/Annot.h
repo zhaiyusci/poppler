@@ -1076,6 +1076,7 @@ public:
     void setStyleString(GooString *new_string);
     void setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line);
     void setIntent(AnnotFreeTextIntent new_intent);
+    void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
 
     // getters
     std::unique_ptr<DefaultAppearance> getDefaultAppearance() const;
@@ -1084,6 +1085,7 @@ public:
     const GooString *getStyleString() const { return styleString.get(); }
     AnnotCalloutLine *getCalloutLine() const { return calloutLine.get(); }
     AnnotFreeTextIntent getIntent() const { return intent; }
+    std::unique_ptr<AnnotColor> getOkularBorderColor() const;
     AnnotBorderEffect *getBorderEffect() const { return borderEffect.get(); }
     PDFRectangle *getRectangle() const { return rectangle.get(); }
     AnnotLineEndingStyle getEndStyle() const { return endStyle; }
@@ -1236,12 +1238,16 @@ public:
     void setOkularLatexNoteScale(double scale);
     void setOkularLatexNoteLayoutWidth(double width);
     void setOkularLatexNoteBoxed(bool boxed);
+    void setOkularLatexNoteFillColor(std::unique_ptr<AnnotColor> &&color);
+    void setOkularLatexNoteBorderColor(std::unique_ptr<AnnotColor> &&color);
 
     // getters
     const std::string &getIcon() const { return icon; }
     double getOkularLatexNoteScale() const;
     double getOkularLatexNoteLayoutWidth() const;
     bool getOkularLatexNoteBoxed() const;
+    std::unique_ptr<AnnotColor> getOkularLatexNoteFillColor() const;
+    std::unique_ptr<AnnotColor> getOkularLatexNoteBorderColor() const;
 
     Object getAppearanceResDict() override;
 
