@@ -180,11 +180,19 @@ void AnnotationPrivate::flushBaseAnnotationProperties()
     // q->setBoundary(boundary); -- already set by subclass-specific code
     q->setStyle(style);
     q->setPopup(popup);
+    for (auto it = customBoolProperties.cbegin(); it != customBoolProperties.cend(); ++it) {
+        q->setCustomBoolProperty(it.key(), it.value());
+    }
+    for (auto it = customRealProperties.cbegin(); it != customRealProperties.cend(); ++it) {
+        q->setCustomRealProperty(it.key(), it.value());
+    }
 
     // Clear some members to save memory
     author.clear();
     contents.clear();
     uniqueName.clear();
+    customBoolProperties.clear();
+    customRealProperties.clear();
     revisions.clear();
 }
 
@@ -1094,6 +1102,78 @@ void Annotation::setContents(const QString &contents)
     if (textAnnotD) {
         textAnnotD->setDefaultAppearanceToNative();
     }
+}
+
+bool Annotation::customBoolProperty(const QString &key, bool defaultValue) const
+{
+    Q_D(const Annotation);
+
+    if (key.isEmpty()) {
+        return defaultValue;
+    }
+
+    if (!d->pdfAnnot) {
+        const auto it = d->customBoolProperties.constFind(key);
+        return it == d->customBoolProperties.cend() ? defaultValue : it.value();
+    }
+
+    const QByteArray name = key.toLatin1();
+    return d->pdfAnnot->getCustomBoolProperty(name.constData(), defaultValue);
+}
+
+void Annotation::setCustomBoolProperty(const QString &key, bool value)
+{
+    Q_D(Annotation);
+
+    if (key.isEmpty()) {
+        return;
+    }
+
+    if (!d->pdfAnnot) {
+        d->customBoolProperties.insert(key, value);
+        return;
+    }
+
+    const QByteArray name = key.toLatin1();
+    d->pdfAnnot->setCustomBoolProperty(name.constData(), value);
+}
+
+double Annotation::customRealProperty(const QString &key, double defaultValue) const
+{
+    Q_D(const Annotation);
+
+    if (key.isEmpty()) {
+        return defaultValue;
+    }
+
+    if (!d->pdfAnnot) {
+        const auto it = d->customRealProperties.constFind(key);
+        return it == d->customRealProperties.cend() ? defaultValue : it.value();
+    }
+
+    const QByteArray name = key.toLatin1();
+    return d->pdfAnnot->getCustomRealProperty(name.constData(), defaultValue);
+}
+
+void Annotation::setCustomRealProperty(const QString &key, double value)
+{
+    if (!std::isfinite(value)) {
+        return;
+    }
+
+    Q_D(Annotation);
+
+    if (key.isEmpty()) {
+        return;
+    }
+
+    if (!d->pdfAnnot) {
+        d->customRealProperties.insert(key, value);
+        return;
+    }
+
+    const QByteArray name = key.toLatin1();
+    d->pdfAnnot->setCustomRealProperty(name.constData(), value);
 }
 
 QString Annotation::uniqueName() const
@@ -2007,8 +2087,7 @@ bool TextAnnotation::okularLatex() const
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
-        return ftextann->getOkularLatex();
+        return customBoolProperty(QStringLiteral("OkularLatex"), false);
     }
 
     return false;
@@ -2020,8 +2099,7 @@ void TextAnnotation::setOkularLatex(bool latex)
     d->okularLatex = latex;
 
     if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
-        ftextann->setOkularLatex(latex);
+        setCustomBoolProperty(QStringLiteral("OkularLatex"), latex);
     }
 }
 
@@ -2034,8 +2112,7 @@ double TextAnnotation::okularLatexScale() const
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
-        return ftextann->getOkularLatexScale();
+        return customRealProperty(QStringLiteral("OkularLatexScale"), 1.0);
     }
 
     return 1.0;
@@ -2051,8 +2128,7 @@ void TextAnnotation::setOkularLatexScale(double scale)
     d->okularLatexScale = scale;
 
     if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
-        ftextann->setOkularLatexScale(scale);
+        setCustomRealProperty(QStringLiteral("OkularLatexScale"), scale);
     }
 }
 
@@ -2065,8 +2141,7 @@ double TextAnnotation::okularLatexLayoutWidth() const
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
-        return ftextann->getOkularLatexLayoutWidth();
+        return customRealProperty(QStringLiteral("OkularLatexLayoutWidth"), 0.0);
     }
 
     return 0.0;
@@ -2082,8 +2157,7 @@ void TextAnnotation::setOkularLatexLayoutWidth(double width)
     d->okularLatexLayoutWidth = width;
 
     if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
-        ftextann->setOkularLatexLayoutWidth(width);
+        setCustomRealProperty(QStringLiteral("OkularLatexLayoutWidth"), width);
     }
 }
 

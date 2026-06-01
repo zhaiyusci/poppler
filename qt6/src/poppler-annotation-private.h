@@ -28,6 +28,7 @@
 
 #include <memory>
 
+#include <QtCore/QMap>
 #include <QtCore/QPointF>
 #include <QtCore/QSharedDataPointer>
 
@@ -81,6 +82,9 @@ public:
     Annotation::RevScope revisionScope = Annotation::Root;
     Annotation::RevType revisionType = Annotation::None;
     std::vector<std::unique_ptr<Annotation>> revisions;
+
+    QMap<QString, bool> customBoolProperties;
+    QMap<QString, double> customRealProperties;
 
     /* After this call, the Annotation object will behave like a wrapper for
      * the specified Annot object. All cached values are discarded */

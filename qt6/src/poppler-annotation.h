@@ -52,6 +52,7 @@
 #define POPPLER_QT6_HAS_STAMP_CUSTOM_PDF_APPEARANCE 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_NOTE_METADATA 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_FREETEXT_APPEARANCE 1
+#define POPPLER_QT6_HAS_ANNOTATION_CUSTOM_SCALAR_PROPERTIES 1
 
 namespace Poppler {
 
@@ -272,6 +273,11 @@ public:
 
     QString contents() const;
     void setContents(const QString &contents);
+
+    bool customBoolProperty(const QString &key, bool defaultValue = false) const;
+    void setCustomBoolProperty(const QString &key, bool value);
+    double customRealProperty(const QString &key, double defaultValue = 0.0) const;
+    void setCustomRealProperty(const QString &key, double value);
 
     /**
      * Returns the unique name (ID) of the annotation.
