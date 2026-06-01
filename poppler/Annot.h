@@ -1078,6 +1078,10 @@ public:
     void setIntent(AnnotFreeTextIntent new_intent);
     void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
     void setRectangle(const PDFRectangle &new_rectangle);
+    bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
+    void setOkularLatex(bool latex);
+    void setOkularLatexScale(double scale);
+    void setOkularLatexLayoutWidth(double width);
 
     // getters
     std::unique_ptr<DefaultAppearance> getDefaultAppearance() const;
@@ -1090,6 +1094,9 @@ public:
     AnnotBorderEffect *getBorderEffect() const { return borderEffect.get(); }
     PDFRectangle *getRectangle() const { return rectangle.get(); }
     AnnotLineEndingStyle getEndStyle() const { return endStyle; }
+    bool getOkularLatex() const;
+    double getOkularLatexScale() const;
+    double getOkularLatexLayoutWidth() const;
 
 protected:
     void initialize(Dict *dict);
@@ -1236,6 +1243,9 @@ public:
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
 
+    void setOkularLatex(bool latex);
+    void setOkularLatexScale(double scale);
+    void setOkularLatexLayoutWidth(double width);
     void setOkularLatexNoteScale(double scale);
     void setOkularLatexNoteLayoutWidth(double width);
     void setOkularLatexNoteBoxed(bool boxed);
@@ -1244,6 +1254,9 @@ public:
 
     // getters
     const std::string &getIcon() const { return icon; }
+    bool getOkularLatex() const;
+    double getOkularLatexScale() const;
+    double getOkularLatexLayoutWidth() const;
     double getOkularLatexNoteScale() const;
     double getOkularLatexNoteLayoutWidth() const;
     bool getOkularLatexNoteBoxed() const;

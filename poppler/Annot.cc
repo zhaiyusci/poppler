@@ -3247,6 +3247,45 @@ std::unique_ptr<AnnotColor> AnnotFreeText::getOkularBorderColor() const
     return {};
 }
 
+void AnnotFreeText::setOkularLatex(bool latex)
+{
+    update("OkularLatex", Object(latex));
+}
+
+void AnnotFreeText::setOkularLatexScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    update("OkularLatexScale", Object(scale));
+}
+
+void AnnotFreeText::setOkularLatexLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    update("OkularLatexLayoutWidth", Object(width));
+}
+
+bool AnnotFreeText::getOkularLatex() const
+{
+    Object obj = annotObj.dictLookup("OkularLatex");
+    return obj.isBool() && obj.getBool();
+}
+
+double AnnotFreeText::getOkularLatexScale() const
+{
+    return annotObj.dictLookup("OkularLatexScale").getNumWithDefaultValue(1.0);
+}
+
+double AnnotFreeText::getOkularLatexLayoutWidth() const
+{
+    return annotObj.dictLookup("OkularLatexLayoutWidth").getNumWithDefaultValue(0.0);
+}
+
 static std::unique_ptr<GfxFont> createAnnotDrawFont(XRef *xref, Dict *fontParentDict, const char *resourceName = "AnnotDrawFont", const char *fontname = "Helvetica")
 {
     const Ref dummyRef = { .num = -1, .gen = -1 };
@@ -3653,6 +3692,148 @@ void AnnotFreeText::generateFreeTextAppearance()
     } else {
         appearance = std::move(newAppearance);
     }
+}
+
+bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber)
+{
+    if (pdfFileName.empty() || pageNumber < 1) {
+        return false;
+    }
+
+    annotLocker();
+
+    PDFDoc sourceDoc(std::make_unique<GooString>(pdfFileName.c_str()));
+    if (!sourceDoc.isOk() || pageNumber > sourceDoc.getNumPages()) {
+        return false;
+    }
+
+    Page *sourcePage = sourceDoc.getPage(pageNumber);
+    if (!sourcePage || !sourcePage->isOk()) {
+        return false;
+    }
+
+    std::vector<char> contentBytes;
+    if (!appendPageContent(sourcePage->getContents(), sourceDoc.getXRef(), &contentBytes)) {
+        return false;
+    }
+
+    const PDFRectangle *sourceBox = sourcePage->isCropped() ? sourcePage->getCropBox() : sourcePage->getMediaBox();
+    const double sourceWidth = sourceBox->x2 - sourceBox->x1;
+    const double sourceHeight = sourceBox->y2 - sourceBox->y1;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
+    std::map<Ref, Ref> copiedRefs;
+    Object resources;
+    Object *sourceResources = sourcePage->getResourceDictObject();
+    if (sourceResources && !sourceResources->isNull()) {
+        Object sourceResourcesObject = sourceResources->isRef() ? sourceResources->fetch(sourceDoc.getXRef()) : sourceResources->copy();
+        resources = copyObjectToXRef(sourceResourcesObject, sourceDoc.getXRef(), doc->getXRef(), copiedRefs);
+    } else {
+        resources = Object(new Dict(doc->getXRef()));
+    }
+    if (!resources.isDict()) {
+        resources = Object(new Dict(doc->getXRef()));
+    }
+
+    GooString innerContent;
+    innerContent.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n", -sourceBox->x1, -sourceBox->y1);
+    innerContent.append(contentBytes.data(), contentBytes.size());
+    innerContent.append("\nQ\n");
+
+    const std::array<double, 4> innerBBoxArray = { 0, 0, sourceWidth, sourceHeight };
+    Object innerForm = createForm(&innerContent, innerBBoxArray, false, std::move(resources));
+    const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
+
+    const double borderWidth = border->getWidth();
+    const double width = rect->x2 - rect->x1;
+    const double height = rect->y2 - rect->y1;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    const PDFRectangle *textRect = rectangle ? rectangle.get() : rect.get();
+    const double boxX = textRect->x1 - rect->x1;
+    const double boxY = textRect->y1 - rect->y1;
+    const double boxWidth = textRect->x2 - textRect->x1;
+    const double boxHeight = textRect->y2 - textRect->y1;
+
+    DefaultAppearance da { appearanceString.get() };
+    if (!da.getFontColor()) {
+        da.setFontColor(std::make_unique<AnnotColor>(0, 0, 0));
+    }
+    const std::unique_ptr<AnnotColor> okularBorderColor = getOkularBorderColor();
+
+    AnnotAppearanceBuilder appearanceBuilder;
+    appearanceBuilder.append("/GS0 gs\nq\n");
+    if (borderWidth > 0) {
+        appearanceBuilder.setLineStyleForBorder(*border);
+    }
+
+    if (intent == intentFreeTextCallout && calloutLine) {
+        if (!okularBorderColor || okularBorderColor->getSpace() != AnnotColor::colorTransparent) {
+            appearanceBuilder.setDrawColor(okularBorderColor ? *okularBorderColor : *da.getFontColor(), false);
+            if (borderWidth > 0) {
+                appearanceBuilder.setLineStyleForBorder(*border);
+            }
+
+            const double x1 = calloutLine->getX1() - rect->x1;
+            const double y1 = calloutLine->getY1() - rect->y1;
+            const double x2 = calloutLine->getX2() - rect->x1;
+            const double y2 = calloutLine->getY2() - rect->y1;
+            const auto *multiLine = dynamic_cast<const AnnotCalloutMultiLine *>(calloutLine.get());
+
+            appearanceBuilder.appendf("{0:.2f} {1:.2f} m\n{2:.2f} {3:.2f} l\n", x1, y1, x2, y2);
+            if (multiLine) {
+                appearanceBuilder.appendf("{0:.2f} {1:.2f} l\n", multiLine->getX3() - rect->x1, multiLine->getY3() - rect->y1);
+            }
+            appearanceBuilder.append("S\n");
+
+            if (endStyle != annotLineEndingNone) {
+                const double firstSegmentLength = std::hypot(x2 - x1, y2 - y1);
+                if (firstSegmentLength > 0) {
+                    Matrix matr;
+                    const double angle = atan2(y2 - y1, x2 - x1);
+                    matr.m[0] = matr.m[3] = cos(angle);
+                    matr.m[1] = sin(angle);
+                    matr.m[2] = -matr.m[1];
+                    matr.m[4] = x1;
+                    matr.m[5] = y1;
+
+                    const double lineEndingSize = std::min(std::max(6.0, 6.0 * borderWidth), firstSegmentLength / 2.0);
+                    appearanceBuilder.drawLineEnding(endStyle, 0, 0, -lineEndingSize, false, matr);
+                }
+            }
+        }
+    }
+
+    const bool doFill = color && color->getSpace() != AnnotColor::colorTransparent;
+    const bool doStroke = borderWidth != 0 && (!okularBorderColor || okularBorderColor->getSpace() != AnnotColor::colorTransparent);
+    if (doFill || doStroke) {
+        if (doStroke) {
+            appearanceBuilder.setDrawColor(okularBorderColor ? *okularBorderColor : *da.getFontColor(), false);
+        }
+        appearanceBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re\n", boxX + borderWidth / 2, boxY + borderWidth / 2, boxWidth - borderWidth, boxHeight - borderWidth);
+        if (doFill) {
+            appearanceBuilder.setDrawColor(*color, true);
+            appearanceBuilder.append(doStroke ? "B\n" : "f\n");
+        } else {
+            appearanceBuilder.append("S\n");
+        }
+    }
+
+    const double textMargin = std::max(3.0, borderWidth * 2.0);
+    const double contentX = boxX + textMargin;
+    const double contentY = boxY + boxHeight - textMargin - sourceHeight;
+    appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ\n", contentX, contentY);
+    appearanceBuilder.append("Q\n");
+
+    const std::array<double, 4> bbox = { 0, 0, width, height };
+    Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
+    Object newAppearance = createForm(appearanceBuilder.buffer(), bbox, false, resDict);
+    setNewAppearance(std::move(newAppearance));
+    return true;
 }
 
 void AnnotFreeText::draw(Gfx *gfx, bool printing)
@@ -6240,6 +6421,7 @@ void AnnotStamp::setIcon(const std::string &new_icon)
 
 void AnnotStamp::setOkularLatexNoteScale(double scale)
 {
+    setOkularLatexScale(scale);
     if (!std::isfinite(scale) || scale <= 0.0) {
         return;
     }
@@ -6249,11 +6431,35 @@ void AnnotStamp::setOkularLatexNoteScale(double scale)
 
 void AnnotStamp::setOkularLatexNoteLayoutWidth(double width)
 {
+    setOkularLatexLayoutWidth(width);
     if (!std::isfinite(width) || width < 0.0) {
         return;
     }
 
     update("OkularLatexNoteLayoutWidth", Object(width));
+}
+
+void AnnotStamp::setOkularLatex(bool latex)
+{
+    update("OkularLatex", Object(latex));
+}
+
+void AnnotStamp::setOkularLatexScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    update("OkularLatexScale", Object(scale));
+}
+
+void AnnotStamp::setOkularLatexLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    update("OkularLatexLayoutWidth", Object(width));
 }
 
 void AnnotStamp::setOkularLatexNoteBoxed(bool boxed)
@@ -6283,12 +6489,34 @@ void AnnotStamp::setOkularLatexNoteBorderColor(std::unique_ptr<AnnotColor> &&col
 
 double AnnotStamp::getOkularLatexNoteScale() const
 {
-    return annotObj.dictLookup("OkularLatexNoteScale").getNumWithDefaultValue(1.0);
+    Object obj = annotObj.dictLookup("OkularLatexNoteScale");
+    return obj.getNumWithDefaultValue(getOkularLatexScale());
 }
 
 double AnnotStamp::getOkularLatexNoteLayoutWidth() const
 {
-    return annotObj.dictLookup("OkularLatexNoteLayoutWidth").getNumWithDefaultValue(0.0);
+    Object obj = annotObj.dictLookup("OkularLatexNoteLayoutWidth");
+    return obj.getNumWithDefaultValue(getOkularLatexLayoutWidth());
+}
+
+bool AnnotStamp::getOkularLatex() const
+{
+    Object obj = annotObj.dictLookup("OkularLatex");
+    if (obj.isBool()) {
+        return obj.getBool();
+    }
+
+    return !annotObj.dictLookup("OkularLatexNoteLayoutWidth").isNull() || !annotObj.dictLookup("OkularLatexNoteBoxed").isNull() || icon.find("latex-notes") != std::string::npos;
+}
+
+double AnnotStamp::getOkularLatexScale() const
+{
+    return annotObj.dictLookup("OkularLatexScale").getNumWithDefaultValue(1.0);
+}
+
+double AnnotStamp::getOkularLatexLayoutWidth() const
+{
+    return annotObj.dictLookup("OkularLatexLayoutWidth").getNumWithDefaultValue(0.0);
 }
 
 bool AnnotStamp::getOkularLatexNoteBoxed() const

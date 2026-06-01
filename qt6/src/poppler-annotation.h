@@ -51,6 +51,7 @@
 
 #define POPPLER_QT6_HAS_STAMP_CUSTOM_PDF_APPEARANCE 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_NOTE_METADATA 1
+#define POPPLER_QT6_HAS_OKULAR_LATEX_FREETEXT_APPEARANCE 1
 
 namespace Poppler {
 
@@ -556,6 +557,14 @@ public:
     InplaceIntent inplaceIntent() const;
     void setInplaceIntent(InplaceIntent intent);
 
+    bool okularLatex() const;
+    void setOkularLatex(bool latex);
+    double okularLatexScale() const;
+    void setOkularLatexScale(double scale);
+    double okularLatexLayoutWidth() const;
+    void setOkularLatexLayoutWidth(double width);
+    bool setTextCustomPdf(const QString &fileName, int page = 1);
+
 private:
     explicit TextAnnotation(TextAnnotationPrivate &dd);
     void setTextType(TextType type);
@@ -807,6 +816,12 @@ public:
     void setOkularLatexNoteFillColor(const QColor &color);
     QColor okularLatexNoteBorderColor() const;
     void setOkularLatexNoteBorderColor(const QColor &color);
+    bool okularLatex() const;
+    void setOkularLatex(bool latex);
+    double okularLatexScale() const;
+    void setOkularLatexScale(double scale);
+    double okularLatexLayoutWidth() const;
+    void setOkularLatexLayoutWidth(double width);
 
 private:
     explicit StampAnnotation(StampAnnotationPrivate &dd);

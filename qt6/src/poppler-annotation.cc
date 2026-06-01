@@ -828,6 +828,11 @@ public:
     TextAnnotation::InplaceAlignPosition inplaceAlign = TextAnnotation::InplaceAlignLeft;
     QVector<QPointF> inplaceCallout;
     TextAnnotation::InplaceIntent inplaceIntent = TextAnnotation::Unknown;
+    bool okularLatex = false;
+    double okularLatexScale = 1.0;
+    double okularLatexLayoutWidth = 0.0;
+    QString textCustomPdfFileName;
+    int textCustomPdfPage = 1;
 };
 
 class Annotation::Style::Private : public QSharedData
@@ -1590,6 +1595,14 @@ std::shared_ptr<Annot> TextAnnotationPrivate::createNativeAnnot(::Page *destPage
     inplaceCallout.clear(); // Free up memory
 
     setDefaultAppearanceToNative();
+    q->setOkularLatex(okularLatex);
+    if (okularLatex) {
+        q->setOkularLatexScale(okularLatexScale);
+        q->setOkularLatexLayoutWidth(okularLatexLayoutWidth);
+    }
+    if (okularLatex && !textCustomPdfFileName.isEmpty()) {
+        q->setTextCustomPdf(textCustomPdfFileName, textCustomPdfPage);
+    }
 
     return pdfAnnot;
 }
@@ -1983,6 +1996,118 @@ void TextAnnotation::setInplaceIntent(TextAnnotation::InplaceIntent intent)
         auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
         ftextann->setIntent((AnnotFreeText::AnnotFreeTextIntent)intent);
     }
+}
+
+bool TextAnnotation::okularLatex() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatex;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
+        return ftextann->getOkularLatex();
+    }
+
+    return false;
+}
+
+void TextAnnotation::setOkularLatex(bool latex)
+{
+    Q_D(TextAnnotation);
+    d->okularLatex = latex;
+
+    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
+        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+        ftextann->setOkularLatex(latex);
+    }
+}
+
+double TextAnnotation::okularLatexScale() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexScale;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
+        return ftextann->getOkularLatexScale();
+    }
+
+    return 1.0;
+}
+
+void TextAnnotation::setOkularLatexScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    Q_D(TextAnnotation);
+    d->okularLatexScale = scale;
+
+    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
+        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+        ftextann->setOkularLatexScale(scale);
+    }
+}
+
+double TextAnnotation::okularLatexLayoutWidth() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexLayoutWidth;
+    }
+
+    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        const auto *ftextann = static_cast<const AnnotFreeText *>(d->pdfAnnot.get());
+        return ftextann->getOkularLatexLayoutWidth();
+    }
+
+    return 0.0;
+}
+
+void TextAnnotation::setOkularLatexLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    Q_D(TextAnnotation);
+    d->okularLatexLayoutWidth = width;
+
+    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
+        auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+        ftextann->setOkularLatexLayoutWidth(width);
+    }
+}
+
+bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page)
+{
+    if (fileName.isEmpty() || page < 1) {
+        return false;
+    }
+
+    Q_D(TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->textCustomPdfFileName = fileName;
+        d->textCustomPdfPage = page;
+        return true;
+    }
+
+    if (d->pdfAnnot->getType() != Annot::typeFreeText) {
+        return false;
+    }
+
+    auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+    const QByteArray encodedFileName = QFile::encodeName(fileName);
+    return ftextann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
 }
 
 /** LineAnnotation [Annotation] */
@@ -2757,6 +2882,9 @@ public:
     QImage stampCustomImage;
     QString stampCustomPdfFileName;
     int stampCustomPdfPage = 1;
+    bool okularLatex = false;
+    double okularLatexScale = 1.0;
+    double okularLatexLayoutWidth = 0.0;
     double okularLatexNoteScale = 1.0;
     double okularLatexNoteLayoutWidth = 0.0;
     bool okularLatexNoteBoxed = false;
@@ -2786,11 +2914,16 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     // Set properties
     flushBaseAnnotationProperties();
     q->setStampIconName(stampIconName);
-    q->setOkularLatexNoteScale(okularLatexNoteScale);
-    q->setOkularLatexNoteLayoutWidth(okularLatexNoteLayoutWidth);
-    q->setOkularLatexNoteBoxed(okularLatexNoteBoxed);
-    q->setOkularLatexNoteFillColor(okularLatexNoteFillColor);
-    q->setOkularLatexNoteBorderColor(okularLatexNoteBorderColor);
+    q->setOkularLatex(okularLatex);
+    if (okularLatex) {
+        q->setOkularLatexScale(okularLatexScale);
+        q->setOkularLatexLayoutWidth(okularLatexLayoutWidth);
+        q->setOkularLatexNoteScale(okularLatexNoteScale);
+        q->setOkularLatexNoteLayoutWidth(okularLatexNoteLayoutWidth);
+        q->setOkularLatexNoteBoxed(okularLatexNoteBoxed);
+        q->setOkularLatexNoteFillColor(okularLatexNoteFillColor);
+        q->setOkularLatexNoteBorderColor(okularLatexNoteBorderColor);
+    }
     if (!stampCustomPdfFileName.isEmpty()) {
         q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
     } else {
@@ -2967,6 +3100,89 @@ bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     const QByteArray encodedFileName = QFile::encodeName(fileName);
     return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
+}
+
+bool StampAnnotation::okularLatex() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatex;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatex();
+}
+
+void StampAnnotation::setOkularLatex(bool latex)
+{
+    Q_D(StampAnnotation);
+    d->okularLatex = latex;
+
+    if (!d->pdfAnnot) {
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatex(latex);
+}
+
+double StampAnnotation::okularLatexScale() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexScale;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatexScale();
+}
+
+void StampAnnotation::setOkularLatexScale(double scale)
+{
+    if (!std::isfinite(scale) || scale <= 0.0) {
+        return;
+    }
+
+    Q_D(StampAnnotation);
+    d->okularLatexScale = scale;
+
+    if (!d->pdfAnnot) {
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexScale(scale);
+}
+
+double StampAnnotation::okularLatexLayoutWidth() const
+{
+    Q_D(const StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        return d->okularLatexLayoutWidth;
+    }
+
+    const auto *stampann = static_cast<const AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->getOkularLatexLayoutWidth();
+}
+
+void StampAnnotation::setOkularLatexLayoutWidth(double width)
+{
+    if (!std::isfinite(width) || width < 0.0) {
+        return;
+    }
+
+    Q_D(StampAnnotation);
+    d->okularLatexLayoutWidth = width;
+
+    if (!d->pdfAnnot) {
+        return;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    stampann->setOkularLatexLayoutWidth(width);
 }
 
 double StampAnnotation::okularLatexNoteScale() const
