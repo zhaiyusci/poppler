@@ -748,6 +748,11 @@ public:
     void setBorder(std::unique_ptr<AnnotBorder> &&new_border);
     void setColor(std::unique_ptr<AnnotColor> &&new_color);
 
+    void setCustomBoolProperty(const char *key, bool value);
+    void setCustomRealProperty(const char *key, double value);
+    bool getCustomBoolProperty(const char *key, bool defaultValue = false) const;
+    double getCustomRealProperty(const char *key, double defaultValue = 0.0) const;
+
     void setAppearanceState(const char *state);
 
     // getters

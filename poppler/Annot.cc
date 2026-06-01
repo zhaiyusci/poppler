@@ -1689,6 +1689,42 @@ void Annot::setColor(std::unique_ptr<AnnotColor> &&new_color)
     invalidateAppearance();
 }
 
+void Annot::setCustomBoolProperty(const char *key, bool value)
+{
+    if (!key || !key[0]) {
+        return;
+    }
+
+    update(key, Object(value));
+}
+
+void Annot::setCustomRealProperty(const char *key, double value)
+{
+    if (!key || !key[0] || !std::isfinite(value)) {
+        return;
+    }
+
+    update(key, Object(value));
+}
+
+bool Annot::getCustomBoolProperty(const char *key, bool defaultValue) const
+{
+    if (!key || !key[0]) {
+        return defaultValue;
+    }
+
+    return annotObj.dictLookup(key).getBoolWithDefaultValue(defaultValue);
+}
+
+double Annot::getCustomRealProperty(const char *key, double defaultValue) const
+{
+    if (!key || !key[0]) {
+        return defaultValue;
+    }
+
+    return annotObj.dictLookup(key).getNumWithDefaultValue(defaultValue);
+}
+
 void Annot::setPage(int pageIndex, bool updateP)
 {
     annotLocker();
@@ -3249,7 +3285,7 @@ std::unique_ptr<AnnotColor> AnnotFreeText::getOkularBorderColor() const
 
 void AnnotFreeText::setOkularLatex(bool latex)
 {
-    update("OkularLatex", Object(latex));
+    setCustomBoolProperty("OkularLatex", latex);
 }
 
 void AnnotFreeText::setOkularLatexScale(double scale)
@@ -3258,7 +3294,7 @@ void AnnotFreeText::setOkularLatexScale(double scale)
         return;
     }
 
-    update("OkularLatexScale", Object(scale));
+    setCustomRealProperty("OkularLatexScale", scale);
 }
 
 void AnnotFreeText::setOkularLatexLayoutWidth(double width)
@@ -3267,23 +3303,22 @@ void AnnotFreeText::setOkularLatexLayoutWidth(double width)
         return;
     }
 
-    update("OkularLatexLayoutWidth", Object(width));
+    setCustomRealProperty("OkularLatexLayoutWidth", width);
 }
 
 bool AnnotFreeText::getOkularLatex() const
 {
-    Object obj = annotObj.dictLookup("OkularLatex");
-    return obj.isBool() && obj.getBool();
+    return getCustomBoolProperty("OkularLatex", false);
 }
 
 double AnnotFreeText::getOkularLatexScale() const
 {
-    return annotObj.dictLookup("OkularLatexScale").getNumWithDefaultValue(1.0);
+    return getCustomRealProperty("OkularLatexScale", 1.0);
 }
 
 double AnnotFreeText::getOkularLatexLayoutWidth() const
 {
-    return annotObj.dictLookup("OkularLatexLayoutWidth").getNumWithDefaultValue(0.0);
+    return getCustomRealProperty("OkularLatexLayoutWidth", 0.0);
 }
 
 static std::unique_ptr<GfxFont> createAnnotDrawFont(XRef *xref, Dict *fontParentDict, const char *resourceName = "AnnotDrawFont", const char *fontname = "Helvetica")
