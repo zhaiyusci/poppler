@@ -1083,7 +1083,7 @@ public:
     void setIntent(AnnotFreeTextIntent new_intent);
     void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
     void setRectangle(const PDFRectangle &new_rectangle);
-    bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
+    bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1, double appearanceScale = 1.0);
     void setOkularLatex(bool latex);
     void setOkularLatexScale(double scale);
     void setOkularLatexLayoutWidth(double width);

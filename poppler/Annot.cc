@@ -3729,9 +3729,12 @@ void AnnotFreeText::generateFreeTextAppearance()
     }
 }
 
-bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber)
+bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber, double appearanceScale)
 {
     if (pdfFileName.empty() || pageNumber < 1) {
+        return false;
+    }
+    if (!std::isfinite(appearanceScale) || appearanceScale <= 0.0) {
         return false;
     }
 
@@ -3787,13 +3790,6 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
         return false;
     }
 
-    double appearanceScale = 1.0;
-    if (getOkularLatex()) {
-        const double storedScale = getOkularLatexScale();
-        if (std::isfinite(storedScale) && storedScale > 0.0) {
-            appearanceScale = storedScale;
-        }
-    }
     const double appearanceWidth = width / appearanceScale;
     const double appearanceHeight = height / appearanceScale;
     if (appearanceWidth <= 0 || appearanceHeight <= 0) {

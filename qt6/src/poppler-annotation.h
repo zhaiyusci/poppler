@@ -570,6 +570,7 @@ public:
     double okularLatexLayoutWidth() const;
     void setOkularLatexLayoutWidth(double width);
     bool setTextCustomPdf(const QString &fileName, int page = 1);
+    bool setTextCustomPdf(const QString &fileName, int page, double appearanceScale);
 
 private:
     explicit TextAnnotation(TextAnnotationPrivate &dd);

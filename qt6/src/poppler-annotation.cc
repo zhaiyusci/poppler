@@ -841,6 +841,8 @@ public:
     double okularLatexLayoutWidth = 0.0;
     QString textCustomPdfFileName;
     int textCustomPdfPage = 1;
+    double textCustomPdfAppearanceScale = 1.0;
+    bool textCustomPdfAppearanceScaleSet = false;
 };
 
 class Annotation::Style::Private : public QSharedData
@@ -1681,7 +1683,11 @@ std::shared_ptr<Annot> TextAnnotationPrivate::createNativeAnnot(::Page *destPage
         q->setOkularLatexLayoutWidth(okularLatexLayoutWidth);
     }
     if (okularLatex && !textCustomPdfFileName.isEmpty()) {
-        q->setTextCustomPdf(textCustomPdfFileName, textCustomPdfPage);
+        if (textCustomPdfAppearanceScaleSet) {
+            q->setTextCustomPdf(textCustomPdfFileName, textCustomPdfPage, textCustomPdfAppearanceScale);
+        } else {
+            q->setTextCustomPdf(textCustomPdfFileName, textCustomPdfPage);
+        }
     }
 
     return pdfAnnot;
@@ -2172,6 +2178,31 @@ bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page)
     if (!d->pdfAnnot) {
         d->textCustomPdfFileName = fileName;
         d->textCustomPdfPage = page;
+        d->textCustomPdfAppearanceScale = 1.0;
+        d->textCustomPdfAppearanceScaleSet = false;
+        return true;
+    }
+
+    const double appearanceScale = okularLatex() ? okularLatexScale() : 1.0;
+    return setTextCustomPdf(fileName, page, appearanceScale);
+}
+
+bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page, double appearanceScale)
+{
+    if (fileName.isEmpty() || page < 1) {
+        return false;
+    }
+    if (!std::isfinite(appearanceScale) || appearanceScale <= 0.0) {
+        return false;
+    }
+
+    Q_D(TextAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->textCustomPdfFileName = fileName;
+        d->textCustomPdfPage = page;
+        d->textCustomPdfAppearanceScale = appearanceScale;
+        d->textCustomPdfAppearanceScaleSet = true;
         return true;
     }
 
@@ -2181,7 +2212,7 @@ bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page)
 
     auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
     const QByteArray encodedFileName = QFile::encodeName(fileName);
-    return ftextann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
+    return ftextann->setCustomPdfPageAppearance(encodedFileName.constData(), page, appearanceScale);
 }
 
 /** LineAnnotation [Annotation] */
