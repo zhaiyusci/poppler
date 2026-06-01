@@ -6586,7 +6586,7 @@ std::unique_ptr<AnnotColor> AnnotStamp::getOkularLatexNoteBorderColor() const
     return {};
 }
 
-void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
+void AnnotStamp::setAppearanceImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
 {
     if (!stampImageHelperA) {
         return;
@@ -6602,6 +6602,11 @@ void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampIm
     // Regenerate appearance stream
     invalidateAppearance();
     updateAppearanceResDict();
+}
+
+void AnnotStamp::setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA)
+{
+    setAppearanceImage(std::move(stampImageHelperA));
 }
 
 bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber)

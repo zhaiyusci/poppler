@@ -1245,6 +1245,7 @@ public:
 
     void setIcon(const std::string &new_icon);
 
+    void setAppearanceImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
 

@@ -3032,7 +3032,7 @@ std::shared_ptr<Annot> StampAnnotationPrivate::createNativeAnnot(::Page *destPag
     if (!stampCustomPdfFileName.isEmpty()) {
         q->setStampCustomPdf(stampCustomPdfFileName, stampCustomPdfPage);
     } else {
-        q->setStampCustomImage(stampCustomImage);
+        q->setStampAppearanceImage(stampCustomImage);
     }
 
     stampIconName.clear(); // Free up memory
@@ -3170,6 +3170,11 @@ void StampAnnotation::setStampIconName(const QString &name)
 
 void StampAnnotation::setStampCustomImage(const QImage &image)
 {
+    setStampAppearanceImage(image);
+}
+
+void StampAnnotation::setStampAppearanceImage(const QImage &image)
+{
     if (image.isNull()) {
         return;
     }
@@ -3184,7 +3189,7 @@ void StampAnnotation::setStampCustomImage(const QImage &image)
 
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     std::unique_ptr<AnnotStampImageHelper> annotCustomImage = d->convertQImageToAnnotStampImageHelper(image);
-    stampann->setCustomImage(std::move(annotCustomImage));
+    stampann->setAppearanceImage(std::move(annotCustomImage));
 }
 
 bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)

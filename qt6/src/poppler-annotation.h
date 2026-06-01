@@ -50,6 +50,7 @@
 #include <memory>
 
 #define POPPLER_QT6_HAS_STAMP_CUSTOM_PDF_APPEARANCE 1
+#define POPPLER_QT6_HAS_STAMP_APPEARANCE_IMAGE 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_NOTE_METADATA 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_FREETEXT_APPEARANCE 1
 #define POPPLER_QT6_HAS_ANNOTATION_CUSTOM_SCALAR_PROPERTIES 1
@@ -804,6 +805,11 @@ public:
        \since 21.10.0
     */
     void setStampCustomImage(const QImage &image);
+
+    /**
+       Set an image as the normal appearance stream for this stamp annotation.
+    */
+    void setStampAppearanceImage(const QImage &image);
 
     /**
        Set a single PDF page as a custom vector appearance for this stamp annotation.
