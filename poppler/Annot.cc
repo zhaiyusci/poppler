@@ -3746,18 +3746,31 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
     Object innerForm = createForm(&innerContent, innerBBoxArray, false, std::move(resources));
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
-    const double borderWidth = border->getWidth();
     const double width = rect->x2 - rect->x1;
     const double height = rect->y2 - rect->y1;
     if (width <= 0 || height <= 0) {
         return false;
     }
 
+    double appearanceScale = 1.0;
+    if (getOkularLatex()) {
+        const double storedScale = getOkularLatexScale();
+        if (std::isfinite(storedScale) && storedScale > 0.0) {
+            appearanceScale = storedScale;
+        }
+    }
+    const double appearanceWidth = width / appearanceScale;
+    const double appearanceHeight = height / appearanceScale;
+    if (appearanceWidth <= 0 || appearanceHeight <= 0) {
+        return false;
+    }
+
+    const double borderWidth = border->getWidth();
     const PDFRectangle *textRect = rectangle ? rectangle.get() : rect.get();
-    const double boxX = textRect->x1 - rect->x1;
-    const double boxY = textRect->y1 - rect->y1;
-    const double boxWidth = textRect->x2 - textRect->x1;
-    const double boxHeight = textRect->y2 - textRect->y1;
+    const double boxX = (textRect->x1 - rect->x1) / appearanceScale;
+    const double boxY = (textRect->y1 - rect->y1) / appearanceScale;
+    const double boxWidth = (textRect->x2 - textRect->x1) / appearanceScale;
+    const double boxHeight = (textRect->y2 - textRect->y1) / appearanceScale;
 
     DefaultAppearance da { appearanceString.get() };
     if (!da.getFontColor()) {
@@ -3778,15 +3791,15 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
                 appearanceBuilder.setLineStyleForBorder(*border);
             }
 
-            const double x1 = calloutLine->getX1() - rect->x1;
-            const double y1 = calloutLine->getY1() - rect->y1;
-            const double x2 = calloutLine->getX2() - rect->x1;
-            const double y2 = calloutLine->getY2() - rect->y1;
+            const double x1 = (calloutLine->getX1() - rect->x1) / appearanceScale;
+            const double y1 = (calloutLine->getY1() - rect->y1) / appearanceScale;
+            const double x2 = (calloutLine->getX2() - rect->x1) / appearanceScale;
+            const double y2 = (calloutLine->getY2() - rect->y1) / appearanceScale;
             const auto *multiLine = dynamic_cast<const AnnotCalloutMultiLine *>(calloutLine.get());
 
             appearanceBuilder.appendf("{0:.2f} {1:.2f} m\n{2:.2f} {3:.2f} l\n", x1, y1, x2, y2);
             if (multiLine) {
-                appearanceBuilder.appendf("{0:.2f} {1:.2f} l\n", multiLine->getX3() - rect->x1, multiLine->getY3() - rect->y1);
+                appearanceBuilder.appendf("{0:.2f} {1:.2f} l\n", (multiLine->getX3() - rect->x1) / appearanceScale, (multiLine->getY3() - rect->y1) / appearanceScale);
             }
             appearanceBuilder.append("S\n");
 
@@ -3829,7 +3842,7 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
     appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ\n", contentX, contentY);
     appearanceBuilder.append("Q\n");
 
-    const std::array<double, 4> bbox = { 0, 0, width, height };
+    const std::array<double, 4> bbox = { 0, 0, appearanceWidth, appearanceHeight };
     Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
     Object newAppearance = createForm(appearanceBuilder.buffer(), bbox, false, resDict);
     setNewAppearance(std::move(newAppearance));
