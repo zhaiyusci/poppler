@@ -2215,6 +2215,22 @@ bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page, double 
     return ftextann->setCustomPdfPageAppearance(encodedFileName.constData(), page, appearanceScale);
 }
 
+bool TextAnnotation::setTextCustomPdfFromCurrentAppearance(double appearanceScale)
+{
+    if (!std::isfinite(appearanceScale) || appearanceScale <= 0.0) {
+        return false;
+    }
+
+    Q_D(TextAnnotation);
+
+    if (!d->pdfAnnot || d->pdfAnnot->getType() != Annot::typeFreeText) {
+        return false;
+    }
+
+    auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
+    return ftextann->setCustomPdfPageAppearanceFromExistingAppearance(appearanceScale);
+}
+
 /** LineAnnotation [Annotation] */
 class LineAnnotationPrivate : public AnnotationPrivate
 {

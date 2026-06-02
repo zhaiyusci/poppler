@@ -1084,6 +1084,7 @@ public:
     void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
     void setRectangle(const PDFRectangle &new_rectangle);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1, double appearanceScale = 1.0);
+    bool setCustomPdfPageAppearanceFromExistingAppearance(double appearanceScale = 1.0);
     void setOkularLatex(bool latex);
     void setOkularLatexScale(double scale);
     void setOkularLatexLayoutWidth(double width);
@@ -1106,6 +1107,7 @@ public:
 protected:
     void initialize(Dict *dict);
     void generateFreeTextAppearance();
+    bool setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight, double appearanceScale);
 
     // required
     std::unique_ptr<GooString> appearanceString; // DA

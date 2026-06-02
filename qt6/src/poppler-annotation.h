@@ -54,6 +54,7 @@
 #define POPPLER_QT6_HAS_OKULAR_LATEX_NOTE_METADATA 1
 #define POPPLER_QT6_HAS_OKULAR_LATEX_FREETEXT_APPEARANCE 1
 #define POPPLER_QT6_HAS_ANNOTATION_CUSTOM_SCALAR_PROPERTIES 1
+#define POPPLER_QT6_HAS_FREETEXT_APPEARANCE_FROM_CURRENT_APPEARANCE 1
 
 namespace Poppler {
 
@@ -572,6 +573,7 @@ public:
     void setOkularLatexLayoutWidth(double width);
     bool setTextCustomPdf(const QString &fileName, int page = 1);
     bool setTextCustomPdf(const QString &fileName, int page, double appearanceScale);
+    bool setTextCustomPdfFromCurrentAppearance(double appearanceScale);
 
 private:
     explicit TextAnnotation(TextAnnotationPrivate &dd);

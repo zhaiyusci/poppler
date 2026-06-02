@@ -3784,6 +3784,71 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
     Object innerForm = createForm(&innerContent, innerBBoxArray, false, std::move(resources));
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
+    return setCustomPdfPageAppearanceFromForm(Object(innerFormRef), 0.0, 0.0, sourceWidth, sourceHeight, appearanceScale);
+}
+
+bool AnnotFreeText::setCustomPdfPageAppearanceFromExistingAppearance(double appearanceScale)
+{
+    if (!std::isfinite(appearanceScale) || appearanceScale <= 0.0) {
+        return false;
+    }
+
+    annotLocker();
+
+    Object appearanceObj = appearance.fetch(doc->getXRef());
+    if (!appearanceObj.isStream()) {
+        return false;
+    }
+
+    Object resources = appearanceObj.streamGetDict()->lookup("Resources");
+    if (!resources.isDict()) {
+        return false;
+    }
+
+    Object xObjects = resources.dictLookup("XObject");
+    if (!xObjects.isDict()) {
+        return false;
+    }
+
+    Object innerForm = xObjects.dictLookupNF("Fm0").copy();
+    if (innerForm.isNull()) {
+        return false;
+    }
+
+    Object innerFormObject = innerForm.isRef() ? innerForm.fetch(doc->getXRef()) : innerForm.copy();
+    if (!innerFormObject.isStream()) {
+        return false;
+    }
+
+    Object bbox = innerFormObject.streamGetDict()->lookup("BBox");
+    if (!bbox.isArray() || bbox.arrayGetLength() != 4) {
+        return false;
+    }
+
+    bool bboxOk = true;
+    const double sourceX1 = bbox.arrayGet(0).getNum(&bboxOk);
+    const double sourceY1 = bboxOk ? bbox.arrayGet(1).getNum(&bboxOk) : 0.0;
+    const double sourceX2 = bboxOk ? bbox.arrayGet(2).getNum(&bboxOk) : 0.0;
+    const double sourceY2 = bboxOk ? bbox.arrayGet(3).getNum(&bboxOk) : 0.0;
+    if (!bboxOk) {
+        return false;
+    }
+
+    const double sourceWidth = sourceX2 - sourceX1;
+    const double sourceHeight = sourceY2 - sourceY1;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
+    return setCustomPdfPageAppearanceFromForm(std::move(innerForm), sourceX1, sourceY1, sourceWidth, sourceHeight, appearanceScale);
+}
+
+bool AnnotFreeText::setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight, double appearanceScale)
+{
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
     const double width = rect->x2 - rect->x1;
     const double height = rect->y2 - rect->y1;
     if (width <= 0 || height <= 0) {
@@ -3870,11 +3935,11 @@ bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, i
     const double textMargin = std::max(3.0, borderWidth * 2.0);
     const double contentX = boxX + textMargin;
     const double contentY = boxY + boxHeight - textMargin - sourceHeight;
-    appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ\n", contentX, contentY);
+    appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ\n", contentX - sourceX1, contentY - sourceY1);
     appearanceBuilder.append("Q\n");
 
     const std::array<double, 4> bbox = { 0, 0, appearanceWidth, appearanceHeight };
-    Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
+    Dict *resDict = createResourcesDict("Fm0", std::move(innerForm), "GS0", opacity, nullptr);
     Object newAppearance = createForm(appearanceBuilder.buffer(), bbox, false, resDict);
     setNewAppearance(std::move(newAppearance));
     return true;
