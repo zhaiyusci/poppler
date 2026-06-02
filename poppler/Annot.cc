@@ -6727,13 +6727,28 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
     constexpr double okularLatexBoxFrameInset = 3.0;
+    const bool okularLatexNote = getOkularLatex();
     const bool boxedLatexNote = getOkularLatexNoteBoxed();
     double outerWidth = sourceWidth;
     double outerHeight = sourceHeight;
     double contentOffsetX = 0.0;
     double contentOffsetY = 0.0;
     double frameWidth = sourceWidth;
-    if (boxedLatexNote) {
+    double appearanceScale = 1.0;
+    if (okularLatexNote) {
+        const double noteScale = getOkularLatexScale();
+        appearanceScale = std::isfinite(noteScale) && noteScale > 0.0 ? noteScale : 1.0;
+        const double width = rect->x2 - rect->x1;
+        const double height = rect->y2 - rect->y1;
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        outerWidth = width / appearanceScale;
+        outerHeight = height / appearanceScale;
+        frameWidth = outerWidth;
+        contentOffsetX = okularLatexBoxFrameInset;
+        contentOffsetY = outerHeight - okularLatexBoxFrameInset - sourceHeight;
+    } else if (boxedLatexNote) {
         const double layoutWidth = getOkularLatexNoteLayoutWidth();
         frameWidth = std::isfinite(layoutWidth) && layoutWidth > 0.0 ? layoutWidth + 2.0 * okularLatexBoxFrameInset : sourceWidth + 2.0 * okularLatexBoxFrameInset;
         outerWidth = std::max(frameWidth, sourceWidth + okularLatexBoxFrameInset);
@@ -6755,14 +6770,33 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
         if (!borderColor) {
             borderColor = std::make_unique<AnnotColor>(0, 0, 0);
         }
-        if (fillColor->getSpace() != AnnotColor::colorTransparent) {
-            appearanceBuilder.setDrawColor(*fillColor, true);
-            appearanceBuilder.appendf("0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
-        }
-        if (frameWidth > 1.0 && outerHeight > 1.0) {
-            if (borderColor->getSpace() != AnnotColor::colorTransparent) {
-                appearanceBuilder.setDrawColor(*borderColor, false);
-                appearanceBuilder.appendf("1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
+        if (okularLatexNote) {
+            const double borderWidth = border->getWidth();
+            const bool doFill = fillColor->getSpace() != AnnotColor::colorTransparent;
+            const bool doStroke = borderWidth != 0 && borderColor->getSpace() != AnnotColor::colorTransparent;
+            if (doFill || doStroke) {
+                if (doStroke) {
+                    appearanceBuilder.setDrawColor(*borderColor, false);
+                    appearanceBuilder.setLineStyleForBorder(*border);
+                }
+                appearanceBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re\n", borderWidth / 2, borderWidth / 2, frameWidth - borderWidth, outerHeight - borderWidth);
+                if (doFill) {
+                    appearanceBuilder.setDrawColor(*fillColor, true);
+                    appearanceBuilder.append(doStroke ? "B\n" : "f\n");
+                } else {
+                    appearanceBuilder.append("S\n");
+                }
+            }
+        } else {
+            if (fillColor->getSpace() != AnnotColor::colorTransparent) {
+                appearanceBuilder.setDrawColor(*fillColor, true);
+                appearanceBuilder.appendf("0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
+            }
+            if (frameWidth > 1.0 && outerHeight > 1.0) {
+                if (borderColor->getSpace() != AnnotColor::colorTransparent) {
+                    appearanceBuilder.setDrawColor(*borderColor, false);
+                    appearanceBuilder.appendf("1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
+                }
             }
         }
         appearanceBuilder.append("Q\n");
