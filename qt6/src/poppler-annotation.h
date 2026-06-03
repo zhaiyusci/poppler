@@ -55,6 +55,7 @@
 #define POPPLER_QT6_HAS_OKULAR_LATEX_FREETEXT_APPEARANCE 1
 #define POPPLER_QT6_HAS_ANNOTATION_CUSTOM_SCALAR_PROPERTIES 1
 #define POPPLER_QT6_HAS_FREETEXT_APPEARANCE_FROM_CURRENT_APPEARANCE 1
+#define POPPLER_QT6_HAS_STAMP_APPEARANCE_FROM_CURRENT_APPEARANCE 1
 
 namespace Poppler {
 
@@ -820,6 +821,7 @@ public:
        Page numbering starts at 1.
     */
     bool setStampCustomPdf(const QString &fileName, int page = 1);
+    bool setStampCustomPdfFromCurrentAppearance();
 
     double okularLatexNoteScale() const;
     void setOkularLatexNoteScale(double scale);

@@ -3228,6 +3228,18 @@ bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)
     return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
 }
 
+bool StampAnnotation::setStampCustomPdfFromCurrentAppearance()
+{
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot || d->pdfAnnot->getType() != Annot::typeStamp) {
+        return false;
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->setCustomPdfPageAppearanceFromExistingAppearance();
+}
+
 bool StampAnnotation::okularLatex() const
 {
     Q_D(const StampAnnotation);

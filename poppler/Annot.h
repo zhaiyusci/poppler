@@ -1250,6 +1250,8 @@ public:
     void setAppearanceImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
+    bool setCustomPdfPageAppearanceFromExistingAppearance();
+    bool setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight);
 
     void setOkularLatex(bool latex);
     void setOkularLatexScale(double scale);

@@ -70,9 +70,11 @@
 
 #include <config.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cmath>
 #include <cassert>
+#include <limits>
 #include <map>
 #include <numbers>
 #include <vector>
@@ -97,7 +99,6 @@
 #include "Link.h"
 #include "UTF.h"
 #include <cstring>
-#include <algorithm>
 #include <utility>
 
 #include "annot_stamp_approved.h"
@@ -6726,14 +6727,113 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     Object innerForm = createForm(&innerContent, innerBBoxArray, false, std::move(resources));
     const Ref innerFormRef = doc->getXRef()->addIndirectObject(innerForm);
 
+    return setCustomPdfPageAppearanceFromForm(Object(innerFormRef), 0.0, 0.0, sourceWidth, sourceHeight);
+}
+
+bool AnnotStamp::setCustomPdfPageAppearanceFromExistingAppearance()
+{
+    annotLocker();
+
+    Object appearanceObj = appearance.fetch(doc->getXRef());
+    if (!appearanceObj.isStream()) {
+        return false;
+    }
+
+    Object resources = appearanceObj.streamGetDict()->lookup("Resources");
+    if (!resources.isDict()) {
+        return false;
+    }
+
+    Object xObjects = resources.dictLookup("XObject");
+    if (!xObjects.isDict()) {
+        return false;
+    }
+
+    Object innerForm = xObjects.dictLookupNF("Fm0").copy();
+    if (innerForm.isNull()) {
+        return false;
+    }
+
+    Object innerFormObject = innerForm.isRef() ? innerForm.fetch(doc->getXRef()) : innerForm.copy();
+    if (!innerFormObject.isStream()) {
+        return false;
+    }
+
+    Object bbox = innerFormObject.streamGetDict()->lookup("BBox");
+    if (!bbox.isArray() || bbox.arrayGetLength() != 4) {
+        return false;
+    }
+
+    bool bboxOk = true;
+    const double sourceX1 = bbox.arrayGet(0).getNum(&bboxOk);
+    const double sourceY1 = bboxOk ? bbox.arrayGet(1).getNum(&bboxOk) : 0.0;
+    const double sourceX2 = bboxOk ? bbox.arrayGet(2).getNum(&bboxOk) : 0.0;
+    const double sourceY2 = bboxOk ? bbox.arrayGet(3).getNum(&bboxOk) : 0.0;
+    if (!bboxOk) {
+        return false;
+    }
+
+    const double sourceWidth = sourceX2 - sourceX1;
+    const double sourceHeight = sourceY2 - sourceY1;
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
+    return setCustomPdfPageAppearanceFromForm(std::move(innerForm), sourceX1, sourceY1, sourceWidth, sourceHeight);
+}
+
+bool AnnotStamp::setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight)
+{
+    if (sourceWidth <= 0 || sourceHeight <= 0) {
+        return false;
+    }
+
     constexpr double okularLatexBoxFrameInset = 3.0;
     const bool okularLatexNote = getOkularLatex();
     const bool boxedLatexNote = getOkularLatexNoteBoxed();
+    const bool okularLatexCallout = annotObj.dictLookup("OkularLatexCallout").getBoolWithDefaultValue(false);
+    const auto customReal = [this](const char *key, double fallback) {
+        Object obj = annotObj.dictLookup(key);
+        return obj.getNumWithDefaultValue(fallback);
+    };
+    const auto validPoint = [](double x, double y) {
+        return std::isfinite(x) && std::isfinite(y);
+    };
+    const double calloutAX = customReal("OkularLatexCalloutPageAX", std::numeric_limits<double>::quiet_NaN());
+    const double calloutAY = customReal("OkularLatexCalloutPageAY", std::numeric_limits<double>::quiet_NaN());
+    const double calloutBX = customReal("OkularLatexCalloutPageBX", std::numeric_limits<double>::quiet_NaN());
+    const double calloutBY = customReal("OkularLatexCalloutPageBY", std::numeric_limits<double>::quiet_NaN());
+    const double calloutCX = customReal("OkularLatexCalloutPageCX", std::numeric_limits<double>::quiet_NaN());
+    const double calloutCY = customReal("OkularLatexCalloutPageCY", std::numeric_limits<double>::quiet_NaN());
+    const bool hasCalloutPoints = okularLatexCallout && validPoint(calloutAX, calloutAY) && validPoint(calloutBX, calloutBY) && validPoint(calloutCX, calloutCY)
+        && (calloutAX != 0.0 || calloutAY != 0.0 || calloutBX != 0.0 || calloutBY != 0.0 || calloutCX != 0.0 || calloutCY != 0.0);
+    PDFRectangle boxRect(*rect);
+    if (okularLatexNote && hasCalloutPoints) {
+        const double boxX1 = customReal("OkularLatexBoxX1", rect->x1);
+        const double boxY1 = customReal("OkularLatexBoxY1", rect->y1);
+        const double boxX2 = customReal("OkularLatexBoxX2", rect->x2);
+        const double boxY2 = customReal("OkularLatexBoxY2", rect->y2);
+        if (std::isfinite(boxX1) && std::isfinite(boxY1) && std::isfinite(boxX2) && std::isfinite(boxY2) && boxX2 > boxX1 && boxY2 > boxY1) {
+            boxRect = PDFRectangle(boxX1, boxY1, boxX2, boxY2);
+        }
+
+        const double borderWidth = std::max(1.0, border->getWidth());
+        const double linePadding = std::max(8.0, borderWidth * 5.0);
+        PDFRectangle expandedRect(std::min({ boxRect.x1, calloutAX, calloutBX, calloutCX }) - linePadding,
+                                  std::min({ boxRect.y1, calloutAY, calloutBY, calloutCY }) - linePadding,
+                                  std::max({ boxRect.x2, calloutAX, calloutBX, calloutCX }) + linePadding,
+                                  std::max({ boxRect.y2, calloutAY, calloutBY, calloutCY }) + linePadding);
+        setRect(expandedRect);
+    }
+
     double outerWidth = sourceWidth;
     double outerHeight = sourceHeight;
     double contentOffsetX = 0.0;
     double contentOffsetY = 0.0;
+    double frameX = 0.0;
+    double frameY = 0.0;
     double frameWidth = sourceWidth;
+    double frameHeight = sourceHeight;
     double appearanceScale = 1.0;
     if (okularLatexNote) {
         const double noteScale = getOkularLatexScale();
@@ -6745,14 +6845,18 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
         }
         outerWidth = width / appearanceScale;
         outerHeight = height / appearanceScale;
-        frameWidth = outerWidth;
-        contentOffsetX = okularLatexBoxFrameInset;
-        contentOffsetY = outerHeight - okularLatexBoxFrameInset - sourceHeight;
+        frameX = (boxRect.x1 - rect->x1) / appearanceScale;
+        frameY = (boxRect.y1 - rect->y1) / appearanceScale;
+        frameWidth = (boxRect.x2 - boxRect.x1) / appearanceScale;
+        frameHeight = (boxRect.y2 - boxRect.y1) / appearanceScale;
+        contentOffsetX = frameX + okularLatexBoxFrameInset;
+        contentOffsetY = frameY + frameHeight - okularLatexBoxFrameInset - sourceHeight;
     } else if (boxedLatexNote) {
         const double layoutWidth = getOkularLatexNoteLayoutWidth();
         frameWidth = std::isfinite(layoutWidth) && layoutWidth > 0.0 ? layoutWidth + 2.0 * okularLatexBoxFrameInset : sourceWidth + 2.0 * okularLatexBoxFrameInset;
+        frameHeight = sourceHeight + 2.0 * okularLatexBoxFrameInset;
         outerWidth = std::max(frameWidth, sourceWidth + okularLatexBoxFrameInset);
-        outerHeight = sourceHeight + 2.0 * okularLatexBoxFrameInset;
+        outerHeight = frameHeight;
         contentOffsetX = okularLatexBoxFrameInset;
         contentOffsetY = okularLatexBoxFrameInset;
     }
@@ -6760,15 +6864,42 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
     const std::array<double, 4> outerBBoxArray = { 0, 0, outerWidth, outerHeight };
     AnnotAppearanceBuilder appearanceBuilder;
     appearanceBuilder.append("/GS0 gs\n");
+    std::unique_ptr<AnnotColor> fillColor;
+    std::unique_ptr<AnnotColor> borderColor = getOkularLatexNoteBorderColor();
+    if (!borderColor) {
+        borderColor = std::make_unique<AnnotColor>(0, 0, 0);
+    }
+    if (okularLatexNote && hasCalloutPoints && borderColor->getSpace() != AnnotColor::colorTransparent) {
+        const double borderWidth = std::max(1.0, border->getWidth());
+        const double x1 = (calloutAX - rect->x1) / appearanceScale;
+        const double y1 = (calloutAY - rect->y1) / appearanceScale;
+        const double x2 = (calloutBX - rect->x1) / appearanceScale;
+        const double y2 = (calloutBY - rect->y1) / appearanceScale;
+        const double x3 = (calloutCX - rect->x1) / appearanceScale;
+        const double y3 = (calloutCY - rect->y1) / appearanceScale;
+        appearanceBuilder.append("q\n");
+        appearanceBuilder.setDrawColor(*borderColor, false);
+        appearanceBuilder.appendf("{0:.2f} w\n", borderWidth);
+        appearanceBuilder.appendf("{0:.2f} {1:.2f} m\n{2:.2f} {3:.2f} l\n{4:.2f} {5:.2f} l\nS\n", x1, y1, x2, y2, x3, y3);
+        const double firstSegmentLength = std::hypot(x2 - x1, y2 - y1);
+        if (firstSegmentLength > 0.0) {
+            Matrix matr;
+            const double angle = atan2(y2 - y1, x2 - x1);
+            matr.m[0] = matr.m[3] = cos(angle);
+            matr.m[1] = sin(angle);
+            matr.m[2] = -matr.m[1];
+            matr.m[4] = x1;
+            matr.m[5] = y1;
+            const double lineEndingSize = std::min(std::max(6.0, 6.0 * borderWidth), firstSegmentLength / 2.0);
+            appearanceBuilder.drawLineEnding(annotLineEndingOpenArrow, 0, 0, -lineEndingSize, false, matr);
+        }
+        appearanceBuilder.append("Q\n");
+    }
     if (boxedLatexNote) {
         appearanceBuilder.append("q\n");
-        std::unique_ptr<AnnotColor> fillColor = getOkularLatexNoteFillColor();
-        std::unique_ptr<AnnotColor> borderColor = getOkularLatexNoteBorderColor();
+        fillColor = getOkularLatexNoteFillColor();
         if (!fillColor) {
             fillColor = std::make_unique<AnnotColor>(1, 1, 0);
-        }
-        if (!borderColor) {
-            borderColor = std::make_unique<AnnotColor>(0, 0, 0);
         }
         if (okularLatexNote) {
             const double borderWidth = border->getWidth();
@@ -6779,7 +6910,7 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
                     appearanceBuilder.setDrawColor(*borderColor, false);
                     appearanceBuilder.setLineStyleForBorder(*border);
                 }
-                appearanceBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re\n", borderWidth / 2, borderWidth / 2, frameWidth - borderWidth, outerHeight - borderWidth);
+                appearanceBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re\n", frameX + borderWidth / 2, frameY + borderWidth / 2, frameWidth - borderWidth, frameHeight - borderWidth);
                 if (doFill) {
                     appearanceBuilder.setDrawColor(*fillColor, true);
                     appearanceBuilder.append(doStroke ? "B\n" : "f\n");
@@ -6790,23 +6921,23 @@ bool AnnotStamp::setCustomPdfPageAppearance(const std::string &pdfFileName, int 
         } else {
             if (fillColor->getSpace() != AnnotColor::colorTransparent) {
                 appearanceBuilder.setDrawColor(*fillColor, true);
-                appearanceBuilder.appendf("0 0 {0:.6f} {1:.6f} re\nf\n", frameWidth, outerHeight);
+                appearanceBuilder.appendf("{0:.6f} {1:.6f} {2:.6f} {3:.6f} re\nf\n", frameX, frameY, frameWidth, frameHeight);
             }
-            if (frameWidth > 1.0 && outerHeight > 1.0) {
+            if (frameWidth > 1.0 && frameHeight > 1.0) {
                 if (borderColor->getSpace() != AnnotColor::colorTransparent) {
                     appearanceBuilder.setDrawColor(*borderColor, false);
-                    appearanceBuilder.appendf("1 w\n0.5 0.5 {0:.6f} {1:.6f} re\nS\n", frameWidth - 1.0, outerHeight - 1.0);
+                    appearanceBuilder.appendf("1 w\n{0:.6f} {1:.6f} {2:.6f} {3:.6f} re\nS\n", frameX + 0.5, frameY + 0.5, frameWidth - 1.0, frameHeight - 1.0);
                 }
             }
         }
         appearanceBuilder.append("Q\n");
     }
     if (contentOffsetX != 0.0 || contentOffsetY != 0.0) {
-        appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ", contentOffsetX, contentOffsetY);
+        appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ", contentOffsetX - sourceX1, contentOffsetY - sourceY1);
     } else {
         appearanceBuilder.append("/Fm0 Do");
     }
-    Dict *resDict = createResourcesDict("Fm0", Object(innerFormRef), "GS0", opacity, nullptr);
+    Dict *resDict = createResourcesDict("Fm0", std::move(innerForm), "GS0", opacity, nullptr);
     Object newAppearance = createForm(appearanceBuilder.buffer(), outerBBoxArray, false, resDict);
 
     setNewAppearance(std::move(newAppearance));
