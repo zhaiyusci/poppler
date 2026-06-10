@@ -3483,40 +3483,32 @@ std::unique_ptr<AnnotColor> AnnotFreeText::getOkularBorderColor() const
 
 void AnnotFreeText::setOkularLatex(bool latex)
 {
-    setCustomBoolProperty("OkularLatex", latex);
+    (void)latex;
 }
 
 void AnnotFreeText::setOkularLatexScale(double scale)
 {
-    if (!std::isfinite(scale) || scale <= 0.0) {
-        return;
-    }
-
-    setCustomRealProperty("OkularLatexScale", scale);
+    (void)scale;
 }
 
 void AnnotFreeText::setOkularLatexLayoutWidth(double width)
 {
-    if (!std::isfinite(width) || width < 0.0) {
-        return;
-    }
-
-    setCustomRealProperty("OkularLatexLayoutWidth", width);
+    (void)width;
 }
 
 bool AnnotFreeText::getOkularLatex() const
 {
-    return getCustomBoolProperty("OkularLatex", false);
+    return false;
 }
 
 double AnnotFreeText::getOkularLatexScale() const
 {
-    return getCustomRealProperty("OkularLatexScale", 1.0);
+    return 1.0;
 }
 
 double AnnotFreeText::getOkularLatexLayoutWidth() const
 {
-    return getCustomRealProperty("OkularLatexLayoutWidth", 0.0);
+    return 0.0;
 }
 
 static std::unique_ptr<GfxFont> createAnnotDrawFont(XRef *xref, Dict *fontParentDict, const char *resourceName = "AnnotDrawFont", const char *fontname = "Helvetica")

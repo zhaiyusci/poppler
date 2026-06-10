@@ -2297,10 +2297,6 @@ bool TextAnnotation::okularLatex() const
         return d->okularLatex;
     }
 
-    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        return customBoolProperty(QStringLiteral("OkularLatex"), false);
-    }
-
     return false;
 }
 
@@ -2308,10 +2304,6 @@ void TextAnnotation::setOkularLatex(bool latex)
 {
     Q_D(TextAnnotation);
     d->okularLatex = latex;
-
-    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        setCustomBoolProperty(QStringLiteral("OkularLatex"), latex);
-    }
 }
 
 double TextAnnotation::okularLatexScale() const
@@ -2320,10 +2312,6 @@ double TextAnnotation::okularLatexScale() const
 
     if (!d->pdfAnnot) {
         return d->okularLatexScale;
-    }
-
-    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        return customRealProperty(QStringLiteral("OkularLatexScale"), 1.0);
     }
 
     return 1.0;
@@ -2337,10 +2325,6 @@ void TextAnnotation::setOkularLatexScale(double scale)
 
     Q_D(TextAnnotation);
     d->okularLatexScale = scale;
-
-    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        setCustomRealProperty(QStringLiteral("OkularLatexScale"), scale);
-    }
 }
 
 double TextAnnotation::okularLatexLayoutWidth() const
@@ -2349,10 +2333,6 @@ double TextAnnotation::okularLatexLayoutWidth() const
 
     if (!d->pdfAnnot) {
         return d->okularLatexLayoutWidth;
-    }
-
-    if (d->pdfAnnot->getType() == Annot::typeFreeText) {
-        return customRealProperty(QStringLiteral("OkularLatexLayoutWidth"), 0.0);
     }
 
     return 0.0;
@@ -2366,10 +2346,6 @@ void TextAnnotation::setOkularLatexLayoutWidth(double width)
 
     Q_D(TextAnnotation);
     d->okularLatexLayoutWidth = width;
-
-    if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
-        setCustomRealProperty(QStringLiteral("OkularLatexLayoutWidth"), width);
-    }
 }
 
 bool TextAnnotation::setTextCustomPdf(const QString &fileName, int page)
