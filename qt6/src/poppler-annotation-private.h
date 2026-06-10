@@ -85,6 +85,7 @@ public:
 
     QMap<QString, bool> customBoolProperties;
     QMap<QString, double> customRealProperties;
+    QMap<QString, QString> customStringProperties;
 
     /* After this call, the Annotation object will behave like a wrapper for
      * the specified Annot object. All cached values are discarded */

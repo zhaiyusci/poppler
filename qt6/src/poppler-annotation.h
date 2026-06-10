@@ -41,6 +41,7 @@
 #include <QtCore/QPointF>
 #include <QtCore/QRectF>
 #include <QtCore/QScopedPointer>
+#include <QtCore/QSizeF>
 #include <QtCore/QVector>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
@@ -281,6 +282,9 @@ public:
     void setCustomBoolProperty(const QString &key, bool value);
     double customRealProperty(const QString &key, double defaultValue = 0.0) const;
     void setCustomRealProperty(const QString &key, double value);
+    QString customStringProperty(const QString &key, const QString &defaultValue = QString()) const;
+    void setCustomStringProperty(const QString &key, const QString &value);
+    void removeCustomProperty(const QString &key);
 
     /**
      * Returns the unique name (ID) of the annotation.
@@ -820,8 +824,24 @@ public:
        The page contents are embedded as the annotation appearance stream.
        Page numbering starts at 1.
     */
+    struct CustomPdfAppearanceOptions
+    {
+        double appearanceScale = 1.0;
+        QSizeF outerSize;
+        QPointF contentOffset;
+        bool alignContentToFrameTopLeft = false;
+        double contentFrameInset = 0.0;
+        QRectF frameRect;
+        double borderWidth = 0.0;
+        QColor fillColor;
+        QColor borderColor;
+        QVector<QPointF> leaderLine;
+    };
+
     bool setStampCustomPdf(const QString &fileName, int page = 1);
+    bool setStampCustomPdf(const QString &fileName, int page, const CustomPdfAppearanceOptions &options);
     bool setStampCustomPdfFromCurrentAppearance();
+    bool setStampCustomPdfFromCurrentAppearance(const CustomPdfAppearanceOptions &options);
 
     double okularLatexNoteScale() const;
     void setOkularLatexNoteScale(double scale);

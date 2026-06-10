@@ -59,6 +59,7 @@
 #include <array>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -750,8 +751,11 @@ public:
 
     void setCustomBoolProperty(const char *key, bool value);
     void setCustomRealProperty(const char *key, double value);
+    void setCustomStringProperty(const char *key, const GooString &value);
+    void removeCustomProperty(const char *key);
     bool getCustomBoolProperty(const char *key, bool defaultValue = false) const;
     double getCustomRealProperty(const char *key, double defaultValue = 0.0) const;
+    std::string getCustomStringProperty(const char *key, const std::string &defaultValue = {}) const;
 
     void setAppearanceState(const char *state);
 
@@ -1239,6 +1243,19 @@ private:
 class POPPLER_PRIVATE_EXPORT AnnotStamp : public AnnotMarkup
 {
 public:
+    struct CustomPdfAppearanceOptions {
+        double appearanceScale = 1.0;
+        std::optional<std::array<double, 2>> outerSize;
+        std::array<double, 2> contentOffset = { 0.0, 0.0 };
+        bool alignContentToFrameTopLeft = false;
+        double contentFrameInset = 0.0;
+        std::optional<std::array<double, 4>> frameRect;
+        double borderWidth = 0.0;
+        std::optional<AnnotColor> fillColor;
+        std::optional<AnnotColor> borderColor;
+        std::optional<std::array<double, 6>> leaderLine;
+    };
+
     AnnotStamp(PDFDoc *docA, PDFRectangle *rect);
     AnnotStamp(PDFDoc *docA, Object &&dictObject, const Object *obj);
     ~AnnotStamp() override;
@@ -1250,8 +1267,11 @@ public:
     void setAppearanceImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     void setCustomImage(std::unique_ptr<AnnotStampImageHelper> &&stampImageHelperA);
     bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber = 1);
+    bool setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber, const CustomPdfAppearanceOptions &options);
     bool setCustomPdfPageAppearanceFromExistingAppearance();
+    bool setCustomPdfPageAppearanceFromExistingAppearance(const CustomPdfAppearanceOptions &options);
     bool setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight);
+    bool setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight, const CustomPdfAppearanceOptions &options);
 
     void setOkularLatex(bool latex);
     void setOkularLatexScale(double scale);

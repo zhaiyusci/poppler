@@ -41,6 +41,7 @@
 #include <QFile>
 #include <QImage>
 
+#include <array>
 #include <cmath>
 
 // local includes
@@ -186,6 +187,9 @@ void AnnotationPrivate::flushBaseAnnotationProperties()
     for (auto it = customRealProperties.cbegin(); it != customRealProperties.cend(); ++it) {
         q->setCustomRealProperty(it.key(), it.value());
     }
+    for (auto it = customStringProperties.cbegin(); it != customStringProperties.cend(); ++it) {
+        q->setCustomStringProperty(it.key(), it.value());
+    }
 
     // Clear some members to save memory
     author.clear();
@@ -193,6 +197,7 @@ void AnnotationPrivate::flushBaseAnnotationProperties()
     uniqueName.clear();
     customBoolProperties.clear();
     customRealProperties.clear();
+    customStringProperties.clear();
     revisions.clear();
 }
 
@@ -1176,6 +1181,62 @@ void Annotation::setCustomRealProperty(const QString &key, double value)
 
     const QByteArray name = key.toLatin1();
     d->pdfAnnot->setCustomRealProperty(name.constData(), value);
+}
+
+QString Annotation::customStringProperty(const QString &key, const QString &defaultValue) const
+{
+    Q_D(const Annotation);
+
+    if (key.isEmpty()) {
+        return defaultValue;
+    }
+
+    if (!d->pdfAnnot) {
+        const auto it = d->customStringProperties.constFind(key);
+        return it == d->customStringProperties.cend() ? defaultValue : it.value();
+    }
+
+    const QByteArray name = key.toLatin1();
+    const std::string value = d->pdfAnnot->getCustomStringProperty(name.constData(), defaultValue.toUtf8().constData());
+    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
+}
+
+void Annotation::setCustomStringProperty(const QString &key, const QString &value)
+{
+    Q_D(Annotation);
+
+    if (key.isEmpty()) {
+        return;
+    }
+
+    if (!d->pdfAnnot) {
+        d->customStringProperties.insert(key, value);
+        return;
+    }
+
+    const QByteArray name = key.toLatin1();
+    const QByteArray encodedValue = value.toUtf8();
+    d->pdfAnnot->setCustomStringProperty(name.constData(), GooString(encodedValue.constData(), encodedValue.size()));
+}
+
+void Annotation::removeCustomProperty(const QString &key)
+{
+    Q_D(Annotation);
+
+    if (key.isEmpty()) {
+        return;
+    }
+
+    d->customBoolProperties.remove(key);
+    d->customRealProperties.remove(key);
+    d->customStringProperties.remove(key);
+
+    if (!d->pdfAnnot) {
+        return;
+    }
+
+    const QByteArray name = key.toLatin1();
+    d->pdfAnnot->removeCustomProperty(name.constData());
 }
 
 QString Annotation::uniqueName() const
@@ -3228,6 +3289,53 @@ bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page)
     return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page);
 }
 
+bool StampAnnotation::setStampCustomPdf(const QString &fileName, int page, const CustomPdfAppearanceOptions &options)
+{
+    if (fileName.isEmpty() || page < 1) {
+        return false;
+    }
+
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot) {
+        d->stampCustomPdfFileName = fileName;
+        d->stampCustomPdfPage = page;
+        d->stampCustomImage = QImage();
+        return true;
+    }
+
+    AnnotStamp::CustomPdfAppearanceOptions popplerOptions;
+    popplerOptions.appearanceScale = options.appearanceScale;
+    if (options.outerSize.isValid()) {
+        popplerOptions.outerSize = std::array<double, 2> { options.outerSize.width(), options.outerSize.height() };
+    }
+    popplerOptions.contentOffset = { options.contentOffset.x(), options.contentOffset.y() };
+    popplerOptions.alignContentToFrameTopLeft = options.alignContentToFrameTopLeft;
+    popplerOptions.contentFrameInset = options.contentFrameInset;
+    if (options.frameRect.isValid()) {
+        popplerOptions.frameRect = std::array<double, 4> { options.frameRect.x(), options.frameRect.y(), options.frameRect.width(), options.frameRect.height() };
+    }
+    popplerOptions.borderWidth = options.borderWidth;
+    if (options.fillColor.isValid()) {
+        popplerOptions.fillColor = options.fillColor.alpha() == 0 ? AnnotColor() : *convertQColor(options.fillColor);
+    }
+    if (options.borderColor.isValid()) {
+        popplerOptions.borderColor = options.borderColor.alpha() == 0 ? AnnotColor() : *convertQColor(options.borderColor);
+    }
+    if (options.leaderLine.size() == 3) {
+        popplerOptions.leaderLine = std::array<double, 6> { options.leaderLine.at(0).x(),
+                                                            options.leaderLine.at(0).y(),
+                                                            options.leaderLine.at(1).x(),
+                                                            options.leaderLine.at(1).y(),
+                                                            options.leaderLine.at(2).x(),
+                                                            options.leaderLine.at(2).y() };
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    const QByteArray encodedFileName = QFile::encodeName(fileName);
+    return stampann->setCustomPdfPageAppearance(encodedFileName.constData(), page, popplerOptions);
+}
+
 bool StampAnnotation::setStampCustomPdfFromCurrentAppearance()
 {
     Q_D(StampAnnotation);
@@ -3238,6 +3346,45 @@ bool StampAnnotation::setStampCustomPdfFromCurrentAppearance()
 
     auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
     return stampann->setCustomPdfPageAppearanceFromExistingAppearance();
+}
+
+bool StampAnnotation::setStampCustomPdfFromCurrentAppearance(const CustomPdfAppearanceOptions &options)
+{
+    Q_D(StampAnnotation);
+
+    if (!d->pdfAnnot || d->pdfAnnot->getType() != Annot::typeStamp) {
+        return false;
+    }
+
+    AnnotStamp::CustomPdfAppearanceOptions popplerOptions;
+    popplerOptions.appearanceScale = options.appearanceScale;
+    if (options.outerSize.isValid()) {
+        popplerOptions.outerSize = std::array<double, 2> { options.outerSize.width(), options.outerSize.height() };
+    }
+    popplerOptions.contentOffset = { options.contentOffset.x(), options.contentOffset.y() };
+    popplerOptions.alignContentToFrameTopLeft = options.alignContentToFrameTopLeft;
+    popplerOptions.contentFrameInset = options.contentFrameInset;
+    if (options.frameRect.isValid()) {
+        popplerOptions.frameRect = std::array<double, 4> { options.frameRect.x(), options.frameRect.y(), options.frameRect.width(), options.frameRect.height() };
+    }
+    popplerOptions.borderWidth = options.borderWidth;
+    if (options.fillColor.isValid()) {
+        popplerOptions.fillColor = options.fillColor.alpha() == 0 ? AnnotColor() : *convertQColor(options.fillColor);
+    }
+    if (options.borderColor.isValid()) {
+        popplerOptions.borderColor = options.borderColor.alpha() == 0 ? AnnotColor() : *convertQColor(options.borderColor);
+    }
+    if (options.leaderLine.size() == 3) {
+        popplerOptions.leaderLine = std::array<double, 6> { options.leaderLine.at(0).x(),
+                                                            options.leaderLine.at(0).y(),
+                                                            options.leaderLine.at(1).x(),
+                                                            options.leaderLine.at(1).y(),
+                                                            options.leaderLine.at(2).x(),
+                                                            options.leaderLine.at(2).y() };
+    }
+
+    auto *stampann = static_cast<AnnotStamp *>(d->pdfAnnot.get());
+    return stampann->setCustomPdfPageAppearanceFromExistingAppearance(popplerOptions);
 }
 
 bool StampAnnotation::okularLatex() const
