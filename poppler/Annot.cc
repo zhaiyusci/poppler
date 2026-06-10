@@ -345,6 +345,55 @@ static std::unique_ptr<PDFRectangle> parseDiffRectangle(Array *array, PDFRectang
     return nullptr;
 }
 
+static bool annotDoubleEqual(double lhs, double rhs)
+{
+    return std::abs(lhs - rhs) <= 0.000001;
+}
+
+static bool annotRectangleEqual(const PDFRectangle &lhs, const PDFRectangle &rhs)
+{
+    return annotDoubleEqual(lhs.x1, rhs.x1) && annotDoubleEqual(lhs.y1, rhs.y1) && annotDoubleEqual(lhs.x2, rhs.x2) && annotDoubleEqual(lhs.y2, rhs.y2);
+}
+
+static bool annotColorEqual(const AnnotColor *lhs, const AnnotColor *rhs)
+{
+    if (!lhs || !rhs) {
+        return lhs == rhs;
+    }
+    if (lhs->getSpace() != rhs->getSpace()) {
+        return false;
+    }
+    const std::array<double, 4> &lhsValues = lhs->getValues();
+    const std::array<double, 4> &rhsValues = rhs->getValues();
+    for (int i = 0; i < lhs->getSpace(); ++i) {
+        if (!annotDoubleEqual(lhsValues[i], rhsValues[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool defaultAppearanceEqual(const DefaultAppearance &lhs, const DefaultAppearance &rhs)
+{
+    return lhs.getFontName() == rhs.getFontName() && annotDoubleEqual(lhs.getFontPtSize(), rhs.getFontPtSize()) && annotColorEqual(lhs.getFontColor(), rhs.getFontColor());
+}
+
+static bool calloutLineEqual(const AnnotCalloutLine *lhs, const AnnotCalloutLine *rhs)
+{
+    if (!lhs || !rhs) {
+        return lhs == rhs;
+    }
+    if (!annotDoubleEqual(lhs->getX1(), rhs->getX1()) || !annotDoubleEqual(lhs->getY1(), rhs->getY1()) || !annotDoubleEqual(lhs->getX2(), rhs->getX2()) || !annotDoubleEqual(lhs->getY2(), rhs->getY2())) {
+        return false;
+    }
+    const auto *lhsMulti = dynamic_cast<const AnnotCalloutMultiLine *>(lhs);
+    const auto *rhsMulti = dynamic_cast<const AnnotCalloutMultiLine *>(rhs);
+    if (!lhsMulti || !rhsMulti) {
+        return lhsMulti == rhsMulti;
+    }
+    return annotDoubleEqual(lhsMulti->getX3(), rhsMulti->getX3()) && annotDoubleEqual(lhsMulti->getY3(), rhsMulti->getY3());
+}
+
 static std::unique_ptr<LinkAction> getAdditionalAction(Annot::AdditionalActionsType type, Object *additionalActions, PDFDoc *doc)
 {
     Object additionalActionsObject = additionalActions->fetch(doc->getXRef());
@@ -378,18 +427,92 @@ static const char *getFormAdditionalActionKey(Annot::FormAdditionalActionsType t
 
 static const char *determineFallbackFont(const std::string &tok, const char *defaultFallback)
 {
-    // TODO: adjust these based on other example PDFs.
-    if (tok == "/ZaDb") {
-        return "ZapfDingbats";
+    const std::string name = !tok.empty() && tok[0] == '/' ? tok.substr(1) : tok;
+
+    if (name == "Helvetica") {
+        return "Helvetica";
     }
-    if (tok == "/Cour") {
+    if (name == "Helvetica-Bold") {
+        return "Helvetica-Bold";
+    }
+    if (name == "Helvetica-Oblique") {
+        return "Helvetica-Oblique";
+    }
+    if (name == "Helvetica-BoldOblique") {
+        return "Helvetica-BoldOblique";
+    }
+    if (name == "Courier") {
         return "Courier";
     }
-    if (tok == "/TiRo") {
-        return "TimesNewRoman";
+    if (name == "Courier-Bold") {
+        return "Courier-Bold";
     }
-    if (tok == "/Helvetica-Bold") {
+    if (name == "Courier-Oblique") {
+        return "Courier-Oblique";
+    }
+    if (name == "Courier-BoldOblique") {
+        return "Courier-BoldOblique";
+    }
+    if (name == "Times-Roman") {
+        return "Times-Roman";
+    }
+    if (name == "Times-Bold") {
+        return "Times-Bold";
+    }
+    if (name == "Times-Italic") {
+        return "Times-Italic";
+    }
+    if (name == "Times-BoldItalic") {
+        return "Times-BoldItalic";
+    }
+    if (name == "Symbol") {
+        return "Symbol";
+    }
+    if (name == "ZapfDingbats") {
+        return "ZapfDingbats";
+    }
+
+    if (name == "ZaDb") {
+        return "ZapfDingbats";
+    }
+    if (name == "Symb") {
+        return "Symbol";
+    }
+    if (name == "Helv") {
+        return "Helvetica";
+    }
+    if (name == "HeBo") {
         return "Helvetica-Bold";
+    }
+    if (name == "HeOb") {
+        return "Helvetica-Oblique";
+    }
+    if (name == "HeBO") {
+        return "Helvetica-BoldOblique";
+    }
+    if (name == "Cour") {
+        return "Courier";
+    }
+    if (name == "CoBo") {
+        return "Courier-Bold";
+    }
+    if (name == "CoOb") {
+        return "Courier-Oblique";
+    }
+    if (name == "CoBO") {
+        return "Courier-BoldOblique";
+    }
+    if (name == "TiRo") {
+        return "Times-Roman";
+    }
+    if (name == "TiBo") {
+        return "Times-Bold";
+    }
+    if (name == "TiIt") {
+        return "Times-Italic";
+    }
+    if (name == "TiBI") {
+        return "Times-BoldItalic";
     }
     return defaultFallback;
 }
@@ -3165,12 +3288,20 @@ void AnnotFreeText::initialize(Dict *dict)
 
 void AnnotFreeText::setContents(std::unique_ptr<GooString> &&new_content)
 {
+    if ((!contents && !new_content) || (contents && new_content && contents->toStr() == new_content->toStr())) {
+        return;
+    }
     Annot::setContents(std::move(new_content));
     invalidateAppearance();
 }
 
 void AnnotFreeText::setDefaultAppearance(const DefaultAppearance &da)
 {
+    const DefaultAppearance currentAppearance(appearanceString.get());
+    if (defaultAppearanceEqual(currentAppearance, da)) {
+        return;
+    }
+
     appearanceString = std::make_unique<GooString>(da.toAppearanceString());
 
     update("DA", Object(appearanceString->copy()));
@@ -3179,6 +3310,10 @@ void AnnotFreeText::setDefaultAppearance(const DefaultAppearance &da)
 
 void AnnotFreeText::setQuadding(VariableTextQuadding new_quadding)
 {
+    if (quadding == new_quadding) {
+        return;
+    }
+
     quadding = new_quadding;
     update("Q", Object((int)quadding));
     invalidateAppearance();
@@ -3186,6 +3321,10 @@ void AnnotFreeText::setQuadding(VariableTextQuadding new_quadding)
 
 void AnnotFreeText::setStyleString(GooString *new_string)
 {
+    if ((!styleString && !new_string) || (styleString && new_string && styleString->toStr() == new_string->toStr())) {
+        return;
+    }
+
     if (new_string) {
         styleString = new_string->copy();
         // append the unicode marker <FE FF> if needed
@@ -3201,6 +3340,10 @@ void AnnotFreeText::setStyleString(GooString *new_string)
 
 void AnnotFreeText::setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line)
 {
+    if (calloutLineEqual(calloutLine.get(), line.get())) {
+        return;
+    }
+
     Object obj1;
     if (line == nullptr) {
         obj1.setToNull();
@@ -3235,21 +3378,23 @@ void AnnotFreeText::setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line)
             calloutMaxY = std::max(calloutMaxY, y3);
         }
 
-        const double margin = std::max(1.0, border ? border->getWidth() : 1.0) * 8.0;
-        PDFRectangle expandedRect;
-        expandedRect.x1 = std::min(textRect.x1, calloutMinX) - margin;
-        expandedRect.y1 = std::min(textRect.y1, calloutMinY) - margin;
-        expandedRect.x2 = std::max(textRect.x2, calloutMaxX) + margin;
-        expandedRect.y2 = std::max(textRect.y2, calloutMaxY) + margin;
-        setRect(expandedRect);
+        if (rectangle) {
+            const double margin = std::max(1.0, border ? border->getWidth() : 1.0) * 8.0;
+            PDFRectangle expandedRect;
+            expandedRect.x1 = std::min(textRect.x1, calloutMinX) - margin;
+            expandedRect.y1 = std::min(textRect.y1, calloutMinY) - margin;
+            expandedRect.x2 = std::max(textRect.x2, calloutMaxX) + margin;
+            expandedRect.y2 = std::max(textRect.y2, calloutMaxY) + margin;
+            setRect(expandedRect);
 
-        rectangle = std::make_unique<PDFRectangle>(textRect);
-        auto *rdArray = new Array(doc->getXRef());
-        rdArray->add(Object(rectangle->x1 - rect->x1));
-        rdArray->add(Object(rectangle->y1 - rect->y1));
-        rdArray->add(Object(rect->x2 - rectangle->x2));
-        rdArray->add(Object(rect->y2 - rectangle->y2));
-        update("RD", Object(rdArray));
+            rectangle = std::make_unique<PDFRectangle>(textRect);
+            auto *rdArray = new Array(doc->getXRef());
+            rdArray->add(Object(rectangle->x1 - rect->x1));
+            rdArray->add(Object(rectangle->y1 - rect->y1));
+            rdArray->add(Object(rect->x2 - rectangle->x2));
+            rdArray->add(Object(rect->y2 - rectangle->y2));
+            update("RD", Object(rdArray));
+        }
 
         if (endStyle == annotLineEndingNone) {
             endStyle = annotLineEndingOpenArrow;
@@ -3266,6 +3411,10 @@ void AnnotFreeText::setIntent(AnnotFreeTextIntent new_intent)
 {
     const char *intentName;
 
+    if (intent == new_intent) {
+        return;
+    }
+
     intent = new_intent;
     if (new_intent == intentFreeText) {
         intentName = "FreeText";
@@ -3279,6 +3428,11 @@ void AnnotFreeText::setIntent(AnnotFreeTextIntent new_intent)
 
 void AnnotFreeText::setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color)
 {
+    const std::unique_ptr<AnnotColor> currentColor = getOkularBorderColor();
+    if (annotColorEqual(currentColor.get(), new_color.get())) {
+        return;
+    }
+
     if (new_color) {
         Object obj1 = new_color->writeToObject(doc->getXRef());
         update("OkularBorderColor", std::move(obj1));
@@ -3290,6 +3444,17 @@ void AnnotFreeText::setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color
 
 void AnnotFreeText::setRectangle(const PDFRectangle &new_rectangle)
 {
+    if (rectangle) {
+        if (annotRectangleEqual(*rectangle, new_rectangle)) {
+            return;
+        }
+    } else if (annotRectangleEqual(*rect, new_rectangle)) {
+        return;
+    } else {
+        setRect(new_rectangle);
+        return;
+    }
+
     rectangle = std::make_unique<PDFRectangle>(new_rectangle);
 
     auto *rdArray = new Array(doc->getXRef());
@@ -3726,11 +3891,12 @@ void AnnotFreeText::generateFreeTextAppearance()
         }
     }
 
-    // if fontname is not in the default resources, create a Helvetica fake font
+    // If fontname is not in the default resources, create a fake font that
+    // preserves the requested PDF Base 14 font when possible.
     if (!font) {
         Dict *fontResDict = new Dict(doc->getXRef());
         resourceObj = Object(fontResDict);
-        font = createAnnotDrawFont(doc->getXRef(), fontResDict, da.getFontName().c_str());
+        font = createAnnotDrawFont(doc->getXRef(), fontResDict, da.getFontName().c_str(), determineFallbackFont(da.getFontName(), "Helvetica"));
     }
 
     // Set font state
@@ -3752,14 +3918,10 @@ void AnnotFreeText::generateFreeTextAppearance()
         Dict *resDict = createResourcesDict("Fm0", std::move(aStream), "GS0", ca, nullptr);
         newAppearance = createForm(&appearBuf, bbox, false, resDict);
     }
-    if (hasBeenUpdated) {
-        // We should technically do this for all annots but AnnotFreeText
-        // is particularly special since we're potentially embeddeing a font so we really need
-        // to set the AP and not let other renderers guess it from the contents
-        setNewAppearance(std::move(newAppearance));
-    } else {
-        appearance = std::move(newAppearance);
-    }
+    // This appearance is generated so Poppler can render FreeText annotations
+    // that have no /AP.  Keep it transient: writing it back would materialize an
+    // /AP merely because the annotation was displayed after a property update.
+    appearance = std::move(newAppearance);
 }
 
 bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber, double appearanceScale)
@@ -5910,10 +6072,10 @@ void AnnotAppearanceBuilder::drawSignatureFieldText(const std::string &text, con
     const double textmargin = borderWidth * 2;
     const double textwidth = width - 2 * textmargin;
 
-    // create a Helvetica fake font
+    // Create a fake font that preserves the requested PDF Base 14 font when possible.
     std::shared_ptr<const GfxFont> font = form ? form->getDefaultResources()->lookupFont(da.getFontName().c_str()) : nullptr;
     if (!font) {
-        font = createAnnotDrawFont(xref, resourcesDict, da.getFontName().c_str());
+        font = createAnnotDrawFont(xref, resourcesDict, da.getFontName().c_str(), determineFallbackFont(da.getFontName(), "Helvetica"));
     }
 
     // Setup text clipping

@@ -78,6 +78,32 @@ static std::unique_ptr<T> static_pointer_cast(std::unique_ptr<U> &&in)
 
 namespace Poppler {
 
+static bool pointsFuzzyEqual(const QVector<QPointF> &lhs, const QVector<QPointF> &rhs)
+{
+    constexpr double tolerance = 0.000001;
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (qsizetype i = 0; i < lhs.size(); ++i) {
+        if (std::abs(lhs[i].x() - rhs[i].x()) > tolerance || std::abs(lhs[i].y() - rhs[i].y()) > tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool numbersFuzzyEqual(double lhs, double rhs)
+{
+    return std::abs(lhs - rhs) <= 0.000001;
+}
+
+static bool stylesEqual(const Annotation::Style &lhs, const Annotation::Style &rhs)
+{
+    return lhs.color() == rhs.color() && numbersFuzzyEqual(lhs.opacity(), rhs.opacity()) && numbersFuzzyEqual(lhs.width(), rhs.width()) && lhs.lineStyle() == rhs.lineStyle()
+        && numbersFuzzyEqual(lhs.xCorners(), rhs.xCorners()) && numbersFuzzyEqual(lhs.yCorners(), rhs.yCorners()) && lhs.dashArray() == rhs.dashArray() && lhs.lineEffect() == rhs.lineEffect()
+        && numbersFuzzyEqual(lhs.effectIntensity(), rhs.effectIntensity());
+}
+
 // BEGIN AnnotationAppearancePrivate implementation
 AnnotationAppearancePrivate::AnnotationAppearancePrivate(Annot *annot)
 {
@@ -836,11 +862,13 @@ public:
     TextAnnotation::TextType textType = TextAnnotation::Linked;
     QString textIcon;
     std::optional<QFont> textFont;
+    double textFontPointSize = -1.0;
     QColor textColor = Qt::black;
     QColor okularBorderColor;
     TextAnnotation::InplaceAlignPosition inplaceAlign = TextAnnotation::InplaceAlignLeft;
     QVector<QPointF> inplaceCallout;
     TextAnnotation::InplaceIntent inplaceIntent = TextAnnotation::Unknown;
+    QString textFontName;
     bool okularLatex = false;
     double okularLatexScale = 1.0;
     double okularLatexLayoutWidth = 0.0;
@@ -1077,6 +1105,10 @@ void Annotation::setAuthor(const QString &author)
         return;
     }
 
+    if (author == this->author()) {
+        return;
+    }
+
     auto *markupann = dynamic_cast<AnnotMarkup *>(d->pdfAnnot.get());
     if (markupann) {
         markupann->setLabel(std::unique_ptr<GooString>(QStringToUnicodeGooString(author)));
@@ -1100,6 +1132,10 @@ void Annotation::setContents(const QString &contents)
 
     if (!d->pdfAnnot) {
         d->contents = contents;
+        return;
+    }
+
+    if (contents == this->contents()) {
         return;
     }
 
@@ -1414,6 +1450,10 @@ void Annotation::setFlags(Annotation::Flags flags)
         return;
     }
 
+    if (this->flags() == flags) {
+        return;
+    }
+
     d->pdfAnnot->setFlags(toPdfFlags(flags));
 }
 
@@ -1502,6 +1542,10 @@ void Annotation::setStyle(const Annotation::Style &style)
 
     if (!d->pdfAnnot) {
         d->style = style;
+        return;
+    }
+
+    if (stylesEqual(this->style(), style)) {
         return;
     }
 
@@ -1758,11 +1802,18 @@ void TextAnnotationPrivate::setDefaultAppearanceToNative()
 {
     if (pdfAnnot && pdfAnnot->getType() == Annot::typeFreeText) {
         auto *ftextann = static_cast<AnnotFreeText *>(pdfAnnot.get());
-        const double pointSize = textFont ? textFont->pointSizeF() : AnnotFreeText::undefinedFontPtSize;
+        double pointSize = textFont ? textFont->pointSizeF() : textFontPointSize;
+        if (!textFont) {
+            std::unique_ptr<DefaultAppearance> da = ftextann->getDefaultAppearance();
+            if (pointSize < 0 && da && da->getFontPtSize() > 0) {
+                pointSize = da->getFontPtSize();
+            }
+        }
         if (pointSize < 0) {
             qWarning() << "TextAnnotationPrivate::createNativeAnnot: font pointSize < 0";
+            pointSize = 10.0;
         }
-        std::string fontName = "Invalid_font";
+        std::string fontName = textFontName.isEmpty() ? std::string("Invalid_font") : textFontName.toStdString();
         if (textFont) {
             Form *form = pdfPage->getDoc()->getCatalog()->getCreateForm();
             if (form) {
@@ -1889,6 +1940,80 @@ void TextAnnotation::setTextFont(const QFont &font)
         return;
     }
     d->textFont = font;
+    d->textFontName.clear();
+    if (font.pointSizeF() > 0) {
+        d->textFontPointSize = font.pointSizeF();
+    }
+
+    d->setDefaultAppearanceToNative();
+}
+
+QString TextAnnotation::textFontName() const
+{
+    Q_D(const TextAnnotation);
+
+    if (!d->textFontName.isEmpty()) {
+        return d->textFontName;
+    }
+
+    if (std::unique_ptr<DefaultAppearance> da { d->getDefaultAppearanceFromNative() }) {
+        return QString::fromStdString(da->getFontName());
+    }
+
+    return {};
+}
+
+double TextAnnotation::textFontPointSize() const
+{
+    Q_D(const TextAnnotation);
+
+    if (d->textFont && d->textFont->pointSizeF() > 0) {
+        return d->textFont->pointSizeF();
+    }
+    if (d->textFontPointSize > 0) {
+        return d->textFontPointSize;
+    }
+
+    if (std::unique_ptr<DefaultAppearance> da { d->getDefaultAppearanceFromNative() }) {
+        if (da->getFontPtSize() > 0) {
+            return da->getFontPtSize();
+        }
+    }
+
+    return 10.0;
+}
+
+void TextAnnotation::setTextFontPointSize(double pointSize)
+{
+    Q_D(TextAnnotation);
+    if (pointSize <= 0) {
+        return;
+    }
+    if (d->pdfAnnot && qFuzzyCompare(textFontPointSize(), pointSize)) {
+        return;
+    }
+    if (d->textFontPointSize == pointSize && (!d->textFont || d->textFont->pointSizeF() == pointSize)) {
+        return;
+    }
+    d->textFontPointSize = pointSize;
+    if (d->textFont) {
+        d->textFont->setPointSizeF(pointSize);
+    }
+
+    d->setDefaultAppearanceToNative();
+}
+
+void TextAnnotation::setTextFontName(const QString &fontName)
+{
+    Q_D(TextAnnotation);
+    if (d->pdfAnnot && !d->textFont && fontName == textFontName()) {
+        return;
+    }
+    if (fontName == d->textFontName && !d->textFont) {
+        return;
+    }
+    d->textFontName = fontName;
+    d->textFont.reset();
 
     d->setDefaultAppearanceToNative();
 }
@@ -1911,6 +2036,9 @@ QColor TextAnnotation::textColor() const
 void TextAnnotation::setTextColor(const QColor &color)
 {
     Q_D(TextAnnotation);
+    if (d->pdfAnnot && color == textColor()) {
+        return;
+    }
     if (color == d->textColor) {
         return;
     }
@@ -1938,6 +2066,9 @@ QColor TextAnnotation::okularBorderColor() const
 void TextAnnotation::setOkularBorderColor(const QColor &color)
 {
     Q_D(TextAnnotation);
+    if (d->pdfAnnot && color == okularBorderColor()) {
+        return;
+    }
     d->okularBorderColor = color;
 
     if (d->pdfAnnot && d->pdfAnnot->getType() == Annot::typeFreeText) {
@@ -1974,6 +2105,9 @@ void TextAnnotation::setOkularInplaceBoundary(const QRectF &boundary)
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        if (okularInplaceBoundary() == boundary) {
+            return;
+        }
         auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
         ftextann->setRectangle(d->boundaryToPdfRectangle(boundary, flags()));
     }
@@ -2025,6 +2159,9 @@ void TextAnnotation::setInplaceAlign(InplaceAlignPosition align)
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        if (inplaceAlign() == align) {
+            return;
+        }
         auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
         ftextann->setQuadding(alignToQuadding(align));
     }
@@ -2080,6 +2217,10 @@ void TextAnnotation::setCalloutPoints(const QVector<QPointF> &points)
     }
 
     if (d->pdfAnnot->getType() != Annot::typeFreeText) {
+        return;
+    }
+
+    if (pointsFuzzyEqual(calloutPoints(), points)) {
         return;
     }
 
@@ -2140,6 +2281,9 @@ void TextAnnotation::setInplaceIntent(TextAnnotation::InplaceIntent intent)
     }
 
     if (d->pdfAnnot->getType() == Annot::typeFreeText) {
+        if (inplaceIntent() == intent) {
+            return;
+        }
         auto *ftextann = static_cast<AnnotFreeText *>(d->pdfAnnot.get());
         ftextann->setIntent((AnnotFreeText::AnnotFreeTextIntent)intent);
     }

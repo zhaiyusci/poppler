@@ -552,6 +552,10 @@ public:
 
     QFont textFont() const;
     void setTextFont(const QFont &font);
+    QString textFontName() const;
+    void setTextFontName(const QString &fontName);
+    double textFontPointSize() const;
+    void setTextFontPointSize(double pointSize);
     /// Default text color is black
     QColor textColor() const;
     void setTextColor(const QColor &color);
