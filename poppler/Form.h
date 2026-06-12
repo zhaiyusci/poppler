@@ -751,6 +751,7 @@ private:
     // in that case the font name will be fontFamily + " " + fontStyle (if fontStyle is empty just fontFamily)
     // if fileSubstitutedIn is true,
     AddFontResult addFontToDefaultResources(const std::string &filepath, int faceIndex, const std::string &fontFamily, const std::string &fontStyle, bool fontSubstitutedIn, bool forceName);
+    AddFontResult addAcrobatCJKFontToDefaultResources(const std::string &fontName);
 
     AddFontResult doGetAddFontToDefaultResources(Unicode uChar, const GfxFont &fontToEmulate);
 

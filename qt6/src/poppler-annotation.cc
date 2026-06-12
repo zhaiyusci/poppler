@@ -38,6 +38,7 @@
 #include <QtCore/QtAlgorithms>
 #include <QtGui/QColor>
 #include <QtGui/QTransform>
+#include <QHash>
 #include <QFile>
 #include <QImage>
 
@@ -77,6 +78,64 @@ static std::unique_ptr<T> static_pointer_cast(std::unique_ptr<U> &&in)
  */
 
 namespace Poppler {
+
+static std::string qFontNameToPopplerFontName(const QString &name)
+{
+#ifdef Q_OS_WIN
+    static const QHash<QString, const char *> windowsFontAliases {
+        { QStringLiteral("仿宋"), "FangSong" },
+        { QStringLiteral("宋体"), "SimSun" },
+        { QStringLiteral("新宋体"), "NSimSun" },
+        { QStringLiteral("黑体"), "SimHei" },
+        { QStringLiteral("楷体"), "KaiTi" },
+        { QStringLiteral("微软雅黑"), "MicrosoftYaHei" },
+        { QStringLiteral("幼圆"), "YouYuan" },
+    };
+    if (auto it = windowsFontAliases.constFind(name); it != windowsFontAliases.constEnd()) {
+        return *it;
+    }
+    return name.toLocal8Bit().toStdString();
+#else
+    return name.toStdString();
+#endif
+}
+
+static QString freeTextXmlEscapedText(const QString &text)
+{
+    QString out;
+    for (const QChar ch : text) {
+        switch (ch.unicode()) {
+        case '&':
+            out += QStringLiteral("&amp;");
+            break;
+        case '<':
+            out += QStringLiteral("&lt;");
+            break;
+        case '>':
+            out += QStringLiteral("&gt;");
+            break;
+        default:
+            if (ch.unicode() > 0x7f) {
+                out += QStringLiteral("&#%1;").arg(ch.unicode());
+            } else {
+                out += ch;
+            }
+            break;
+        }
+    }
+    return out;
+}
+
+static QString freeTextRichContents(const QString &text, const QString &fontFamily, double pointSize, const QColor &textColor)
+{
+    return QStringLiteral("<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\" xfa:spec=\"2.0.2\" style=\"font-size:%1pt;text-align:left;color:%2;font-weight:normal;font-style:normal;font-family:%3;font-stretch:normal\"><p dir=\"ltr\"><span style=\"line-height:%4pt;font-family:%5\">%6</span></p></body>")
+            .arg(pointSize, 0, 'f', 1)
+            .arg(textColor.name(QColor::HexRgb).toUpper())
+            .arg(fontFamily)
+            .arg(pointSize * 1.35, 0, 'f', 1)
+            .arg(fontFamily)
+            .arg(freeTextXmlEscapedText(text));
+}
 
 static bool pointsFuzzyEqual(const QVector<QPointF> &lhs, const QVector<QPointF> &rhs)
 {
@@ -1813,24 +1872,36 @@ void TextAnnotationPrivate::setDefaultAppearanceToNative()
             qWarning() << "TextAnnotationPrivate::createNativeAnnot: font pointSize < 0";
             pointSize = 10.0;
         }
-        std::string fontName = textFontName.isEmpty() ? std::string("Invalid_font") : textFontName.toStdString();
+        std::string fontName = textFontName.isEmpty() ? std::string("Helvetica") : textFontName.toStdString();
         if (textFont) {
             Form *form = pdfPage->getDoc()->getCatalog()->getCreateForm();
             if (form) {
-                fontName = form->findFontInDefaultResources(textFont->family().toStdString(), textFont->styleName().toStdString());
+                const std::string familyName = qFontNameToPopplerFontName(textFont->family());
+                fontName = form->findFontInDefaultResources(familyName, textFont->styleName().toStdString());
                 if (fontName.empty()) {
-                    fontName = form->addFontToDefaultResources(textFont->family().toStdString(), textFont->styleName().toStdString()).fontName;
+                    fontName = form->addFontToDefaultResources(familyName, textFont->styleName().toStdString()).fontName;
                 }
 
-                if (!fontName.empty()) {
-                    form->ensureFontsForAllCharacters(pdfAnnot->getContents(), fontName);
-                } else {
-                    fontName = "Invalid_font";
+                if (fontName.empty()) {
+                    fontName = "Helvetica";
                 }
             }
         }
         DefaultAppearance da { fontName, pointSize, convertQColor(textColor) };
         ftextann->setDefaultAppearance(da);
+        if (textFont) {
+            const QString pdfFontFamily = QString::fromStdString(fontName);
+            const QString ds = QStringLiteral("font: %1 %2pt;font-stretch:Normal; text-align:left; color:%3 ")
+                                       .arg(pdfFontFamily)
+                                       .arg(pointSize, 0, 'f', 1)
+                                       .arg(textColor.name(QColor::HexRgb).toUpper());
+            GooString dsString(ds.toStdString());
+            ftextann->setStyleString(&dsString);
+            const QString rc = freeTextRichContents(UnicodeParsedString(pdfAnnot->getContents()), pdfFontFamily, pointSize, textColor);
+            GooString rcString(rc.toStdString());
+            ftextann->setRichContents(&rcString);
+        }
+        ftextann->regenerateAppearance();
     }
 }
 

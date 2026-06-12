@@ -501,7 +501,7 @@ FamilyStyleFontSearchResult GlobalParams::findSystemFontFileForFamilyAndStyle(co
     const std::scoped_lock locker(mutex);
     setupBaseFonts(POPPLER_FONTSDIR);
 
-    const std::string familyAndStyle = fontFamily + " " + fontStyle;
+    const std::string familyAndStyle = fontStyle.empty() ? fontFamily : fontFamily + " " + fontStyle;
 
     const SysFontInfo *fi = sysFonts->find(familyAndStyle, false, false, filesToIgnore);
     if (fi) {

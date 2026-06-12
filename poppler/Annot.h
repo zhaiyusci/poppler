@@ -602,6 +602,7 @@ public:
     static double lineEndingXShorten(AnnotLineEndingStyle endingStyle, double size);
     static double lineEndingXExtendBBox(AnnotLineEndingStyle endingStyle, double size);
     void writeString(const std::string &str);
+    void writeHexString(const std::string &str);
 
     void append(const char *text);
     void appendf(const char *fmt, ...) GOOSTRING_FORMAT;
@@ -1081,8 +1082,10 @@ public:
     void setContents(std::unique_ptr<GooString> &&new_content) override;
 
     void setDefaultAppearance(const DefaultAppearance &da);
+    void regenerateAppearance();
     void setQuadding(VariableTextQuadding new_quadding);
     void setStyleString(GooString *new_string);
+    void setRichContents(GooString *new_string);
     void setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line);
     void setIntent(AnnotFreeTextIntent new_intent);
     void setOkularBorderColor(std::unique_ptr<AnnotColor> &&new_color);
@@ -1110,7 +1113,7 @@ public:
 
 protected:
     void initialize(Dict *dict);
-    void generateFreeTextAppearance();
+    void generateFreeTextAppearance(bool persist = false);
     bool setCustomPdfPageAppearanceFromForm(Object &&innerForm, double sourceX1, double sourceY1, double sourceWidth, double sourceHeight, double appearanceScale);
 
     // required

@@ -47,6 +47,7 @@
 #include <config.h>
 
 #include <array>
+#include <algorithm>
 #include <set>
 #include <limits>
 #include <cstddef>
@@ -2719,6 +2720,13 @@ std::string Form::findFontInDefaultResources(const std::string &fontFamily, cons
 
 Form::AddFontResult Form::addFontToDefaultResources(const std::string &fontFamily, const std::string &fontStyle, bool forceName)
 {
+    if (fontStyle.empty()) {
+        AddFontResult cjkFont = addAcrobatCJKFontToDefaultResources(fontFamily);
+        if (!cjkFont.fontName.empty()) {
+            return cjkFont;
+        }
+    }
+
     FamilyStyleFontSearchResult findFontRes = globalParams->findSystemFontFileForFamilyAndStyle(fontFamily, fontStyle);
     std::vector<std::string> filesToIgnore;
     while (!findFontRes.filepath.empty()) {
@@ -2730,6 +2738,105 @@ Form::AddFontResult Form::addFontToDefaultResources(const std::string &fontFamil
         findFontRes = globalParams->findSystemFontFileForFamilyAndStyle(fontFamily, fontStyle, filesToIgnore);
     }
     return {};
+}
+
+Form::AddFontResult Form::addAcrobatCJKFontToDefaultResources(const std::string &fontName)
+{
+    static const std::array<std::string_view, 12> acrobatCJKFonts { "AdobeSongStd-Light", "FZShuTi", "FZYaoTi", "FangSong", "KaiTi", "STXingkai", "STXinwei", "STZhongsong", "SimHei", "SimSun", "YouYuan", "MicrosoftYaHei" };
+    if (std::ranges::find(acrobatCJKFonts, fontName) == acrobatCJKFonts.end()) {
+        return {};
+    }
+
+    if (defaultResources && defaultResources->lookupFont(fontName.c_str())) {
+        return { .fontName = fontName, .ref = Ref::INVALID() };
+    }
+
+    XRef *xref = doc->getXRef();
+
+    auto cidSystemInfo = std::make_unique<Dict>(xref);
+    cidSystemInfo->set("Registry", Object(std::make_unique<GooString>("Adobe")));
+    cidSystemInfo->set("Ordering", Object(std::make_unique<GooString>("GB1")));
+    cidSystemInfo->set("Supplement", Object(4));
+    const Ref cidSystemInfoRef = xref->addIndirectObject(Object(cidSystemInfo.release()));
+
+    auto fontBBox = std::make_unique<Array>(xref);
+    fontBBox->add(Object(-8));
+    fontBBox->add(Object(-164));
+    fontBBox->add(Object(1004));
+    fontBBox->add(Object(859));
+
+    auto fontDescriptor = std::make_unique<Dict>(xref);
+    fontDescriptor->set("Type", Object(objName, "FontDescriptor"));
+    fontDescriptor->set("FontName", Object(objName, fontName.c_str()));
+    fontDescriptor->set("Flags", Object(fontName == "FangSong" ? 34 : 32));
+    fontDescriptor->set("FontBBox", Object(fontBBox.release()));
+    fontDescriptor->set("FontFamily", Object(std::make_unique<GooString>(fontName)));
+    fontDescriptor->set("FontStretch", Object(objName, "Normal"));
+    fontDescriptor->set("FontWeight", Object(400));
+    fontDescriptor->set("ItalicAngle", Object(0));
+    fontDescriptor->set("Ascent", Object(859));
+    fontDescriptor->set("Descent", Object(-164));
+    fontDescriptor->set("CapHeight", Object(668));
+    fontDescriptor->set("StemV", Object(52));
+    fontDescriptor->set("XHeight", Object(438));
+    const Ref fontDescriptorRef = xref->addIndirectObject(Object(fontDescriptor.release()));
+
+    auto widths = std::make_unique<Array>(xref);
+    auto cidZeroWidths = std::make_unique<Array>(xref);
+    cidZeroWidths->add(Object(1000));
+    widths->add(Object(0));
+    widths->add(Object(cidZeroWidths.release()));
+    widths->add(Object(1));
+    widths->add(Object(95));
+    widths->add(Object(500));
+
+    auto descendantFont = std::make_unique<Dict>(xref);
+    descendantFont->set("Type", Object(objName, "Font"));
+    descendantFont->set("Subtype", Object(objName, "CIDFontType2"));
+    descendantFont->set("BaseFont", Object(objName, fontName.c_str()));
+    descendantFont->set("CIDSystemInfo", Object(cidSystemInfoRef));
+    descendantFont->set("FontDescriptor", Object(fontDescriptorRef));
+    descendantFont->set("DW", Object(1000));
+    descendantFont->set("W", Object(widths.release()));
+    const Ref descendantFontRef = xref->addIndirectObject(Object(descendantFont.release()));
+
+    auto descendantFonts = std::make_unique<Array>(xref);
+    descendantFonts->add(Object(descendantFontRef));
+    const Ref descendantFontsRef = xref->addIndirectObject(Object(descendantFonts.release()));
+
+    Object fontDict(new Dict(xref));
+    fontDict.dictSet("Type", Object(objName, "Font"));
+    fontDict.dictSet("Subtype", Object(objName, "Type0"));
+    fontDict.dictSet("BaseFont", Object(objName, fontName.c_str()));
+    fontDict.dictSet("Encoding", Object(objName, "UniGB-UTF16-H"));
+    fontDict.dictSet("DescendantFonts", Object(descendantFontsRef));
+
+    const Ref fontDictRef = xref->addIndirectObject(fontDict);
+    Object *acroForm = doc->getCatalog()->getAcroForm();
+    if (resDict.isDict()) {
+        Ref fontDictObjRef;
+        Object fontDictObj = resDict.getDict()->lookup("Font", &fontDictObjRef);
+        assert(fontDictObj.isDict());
+        fontDictObj.dictSet(fontName, Object(fontDictRef));
+        if (fontDictObjRef != Ref::INVALID()) {
+            xref->setModifiedObject(&fontDictObj, fontDictObjRef);
+        } else {
+            doc->getCatalog()->setAcroFormModified();
+        }
+        delete defaultResources;
+        defaultResources = new GfxResources(xref, resDict.getDict(), nullptr);
+    } else {
+        Dict *fontsDict = new Dict(xref);
+        fontsDict->set(fontName, Object(fontDictRef));
+        Dict *defaultResourcesDict = new Dict(xref);
+        defaultResourcesDict->set("Font", Object(fontsDict));
+        defaultResources = new GfxResources(xref, defaultResourcesDict, nullptr);
+        resDict = Object(defaultResourcesDict);
+        acroForm->dictSet("DR", resDict.copy());
+        doc->getCatalog()->setAcroFormModified();
+    }
+
+    return { .fontName = fontName, .ref = fontDictRef };
 }
 
 Form::AddFontResult Form::addFontToDefaultResources(const std::string &filepath, int faceIndex, const std::string &fontFamily, const std::string &fontStyle, bool fontSubstitutedIn, bool forceName)

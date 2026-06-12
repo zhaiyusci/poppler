@@ -3338,6 +3338,15 @@ void AnnotFreeText::setStyleString(GooString *new_string)
     update("DS", Object(styleString->copy()));
 }
 
+void AnnotFreeText::setRichContents(GooString *new_string)
+{
+    if (!new_string) {
+        update("RC", Object::null());
+        return;
+    }
+    update("RC", Object(new_string->copy()));
+}
+
 void AnnotFreeText::setCalloutLine(std::unique_ptr<AnnotCalloutLine> &&line)
 {
     if (calloutLineEqual(calloutLine.get(), line.get())) {
@@ -3734,7 +3743,11 @@ static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double
             const double xDiff = first ? xPos - xPosPrev : prevBlockWidth;
 
             builder.appendf("{0:.2f} {1:.2f} Td\n", xDiff, yDiff);
-            builder.writeString(d.text);
+            if (font.getEncodingName() == "UniGB-UTF16-H") {
+                builder.writeHexString(d.text);
+            } else {
+                builder.writeString(d.text);
+            }
             builder.append(" Tj\n");
             first = false;
             prevBlockWidth = d.width * fontSize;
@@ -3756,7 +3769,12 @@ static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double
     return result;
 }
 
-void AnnotFreeText::generateFreeTextAppearance()
+void AnnotFreeText::regenerateAppearance()
+{
+    generateFreeTextAppearance(true);
+}
+
+void AnnotFreeText::generateFreeTextAppearance(bool persist)
 {
     double borderWidth, ca = opacity;
 
@@ -3921,10 +3939,14 @@ void AnnotFreeText::generateFreeTextAppearance()
         Dict *resDict = createResourcesDict("Fm0", std::move(aStream), "GS0", ca, nullptr);
         newAppearance = createForm(&appearBuf, bbox, false, resDict);
     }
-    // This appearance is generated so Poppler can render FreeText annotations
-    // that have no /AP.  Keep it transient: writing it back would materialize an
-    // /AP merely because the annotation was displayed after a property update.
-    appearance = std::move(newAppearance);
+    if (persist) {
+        setNewAppearance(std::move(newAppearance));
+    } else {
+        // This appearance is generated so Poppler can render FreeText annotations
+        // that have no /AP.  Keep it transient: writing it back would materialize an
+        // /AP merely because the annotation was displayed after a property update.
+        appearance = std::move(newAppearance);
+    }
 }
 
 bool AnnotFreeText::setCustomPdfPageAppearance(const std::string &pdfFileName, int pageNumber, double appearanceScale)
@@ -5128,7 +5150,10 @@ void Annot::layoutText(const GooString *text, GooString *outBuf, size_t *i, cons
             break;
         }
 
-        if (noReencode) {
+        if (unicode && font.isCIDFont() && font.getEncodingName() == "UniGB-UTF16-H") {
+            outBuf->push_back((uChar >> 8) & 0xff);
+            outBuf->push_back(uChar & 0xff);
+        } else if (noReencode) {
             outBuf->push_back(uChar);
         } else {
             const CharCodeToUnicode *ccToUnicode = font.getToUnicode();
@@ -5286,6 +5311,15 @@ void AnnotAppearanceBuilder::writeString(const std::string &str)
     }
 
     appearBuf->push_back(')');
+}
+
+void AnnotAppearanceBuilder::writeHexString(const std::string &str)
+{
+    appearBuf->push_back('<');
+    for (const unsigned char c : str) {
+        appearBuf->appendf("{0:02x}", c);
+    }
+    appearBuf->push_back('>');
 }
 
 // Draw the variable text or caption for a field.
