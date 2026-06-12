@@ -3776,6 +3776,17 @@ void AnnotFreeText::generateFreeTextAppearance()
     const double boxY = textRect->y1 - rect->y1;
     const double boxWidth = textRect->x2 - textRect->x1;
     const double boxHeight = textRect->y2 - textRect->y1;
+    if (intent == intentFreeTextCallout && calloutLine) {
+        appearBBox = std::make_unique<AnnotAppearanceBBox>(rect.get());
+        appearBBox->setBorderWidth(std::max(8.0, std::max(1.0, borderWidth) * 8.0));
+        appearBBox->extendTo(calloutLine->getX1() - rect->x1, calloutLine->getY1() - rect->y1);
+        appearBBox->extendTo(calloutLine->getX2() - rect->x1, calloutLine->getY2() - rect->y1);
+        if (const auto *multiLine = dynamic_cast<const AnnotCalloutMultiLine *>(calloutLine.get())) {
+            appearBBox->extendTo(multiLine->getX3() - rect->x1, multiLine->getY3() - rect->y1);
+        }
+    } else {
+        appearBBox = nullptr;
+    }
 
     // Parse some properties from the appearance string
     DefaultAppearance da { appearanceString.get() };
@@ -3898,7 +3909,7 @@ void AnnotFreeText::generateFreeTextAppearance()
     appearBuilder.append(textCommands.text.c_str());
     appearBuilder.append("ET Q\n");
 
-    const std::array<double, 4> bbox = { 0, 0, rect->x2 - rect->x1, rect->y2 - rect->y1 };
+    const std::array<double, 4> bbox = appearBBox ? appearBBox->getBBoxRect() : std::array<double, 4> { 0, 0, rect->x2 - rect->x1, rect->y2 - rect->y1 };
 
     Object newAppearance;
     if (ca == 1) {
@@ -4145,7 +4156,11 @@ void AnnotFreeText::draw(Gfx *gfx, bool printing)
 
     // draw the appearance stream
     Object obj = appearance.fetch(gfx->getXRef());
-    gfx->drawAnnot(&obj, nullptr, color.get(), rect->x1, rect->y1, rect->x2, rect->y2, getRotation());
+    if (appearBBox) {
+        gfx->drawAnnot(&obj, nullptr, color.get(), appearBBox->getPageXMin(), appearBBox->getPageYMin(), appearBBox->getPageXMax(), appearBBox->getPageYMax(), getRotation());
+    } else {
+        gfx->drawAnnot(&obj, nullptr, color.get(), rect->x1, rect->y1, rect->x2, rect->y2, getRotation());
+    }
 }
 
 // Before retrieving the res dict, regenerate the appearance stream if needed,
