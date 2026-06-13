@@ -77,6 +77,7 @@
 #include <limits>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <vector>
 #include "goo/gstrtod.h"
 #include "Error.h"
@@ -99,6 +100,7 @@
 #include "DateInfo.h"
 #include "Link.h"
 #include "UTF.h"
+#include "fofi/FoFiTrueType.h"
 #include <cstring>
 #include <utility>
 
@@ -3553,14 +3555,19 @@ static Unicode annotTextCharAt(const std::string &text, bool isUnicode, size_t i
     return pdfDocEncoding[text[i] & 0xff];
 }
 
-static std::unique_ptr<GfxFont> createAnnotCJKFallbackFont(XRef *xref, Dict *fontParentDict, const char *resourceName, const char *fontname)
+static std::unique_ptr<GfxFont> createAnnotFallbackFont(XRef *xref, Dict *fontParentDict, const char *resourceName, const UCharFontSearchResult &fontSearchResult)
 {
+    if (fontSearchResult.family.empty() || fontSearchResult.filepath.empty()) {
+        return {};
+    }
+
     const Ref dummyRef = { .num = -1, .gen = -1 };
+    const std::string fontName = fontSearchResult.style.empty() ? fontSearchResult.family : fontSearchResult.family + " " + fontSearchResult.style;
 
     auto cidSystemInfo = std::make_unique<Dict>(xref);
     cidSystemInfo->set("Registry", Object(std::make_unique<GooString>("Adobe")));
-    cidSystemInfo->set("Ordering", Object(std::make_unique<GooString>("GB1")));
-    cidSystemInfo->set("Supplement", Object(4));
+    cidSystemInfo->set("Ordering", Object(std::make_unique<GooString>("Identity")));
+    cidSystemInfo->set("Supplement", Object(0));
 
     auto fontBBox = std::make_unique<Array>(xref);
     fontBBox->add(Object(-8));
@@ -3570,10 +3577,10 @@ static std::unique_ptr<GfxFont> createAnnotCJKFallbackFont(XRef *xref, Dict *fon
 
     auto fontDescriptor = std::make_unique<Dict>(xref);
     fontDescriptor->set("Type", Object(objName, "FontDescriptor"));
-    fontDescriptor->set("FontName", Object(objName, fontname));
+    fontDescriptor->set("FontName", Object(objName, fontName.c_str()));
     fontDescriptor->set("Flags", Object(32));
     fontDescriptor->set("FontBBox", Object(fontBBox.release()));
-    fontDescriptor->set("FontFamily", Object(std::make_unique<GooString>(fontname)));
+    fontDescriptor->set("FontFamily", Object(std::make_unique<GooString>(fontName)));
     fontDescriptor->set("FontStretch", Object(objName, "Normal"));
     fontDescriptor->set("FontWeight", Object(400));
     fontDescriptor->set("ItalicAngle", Object(0));
@@ -3595,11 +3602,34 @@ static std::unique_ptr<GfxFont> createAnnotCJKFallbackFont(XRef *xref, Dict *fon
     auto descendantFont = std::make_unique<Dict>(xref);
     descendantFont->set("Type", Object(objName, "Font"));
     descendantFont->set("Subtype", Object(objName, "CIDFontType2"));
-    descendantFont->set("BaseFont", Object(objName, fontname));
+    descendantFont->set("BaseFont", Object(objName, fontName.c_str()));
     descendantFont->set("CIDSystemInfo", Object(cidSystemInfo.release()));
     descendantFont->set("FontDescriptor", Object(fontDescriptor.release()));
     descendantFont->set("DW", Object(1000));
     descendantFont->set("W", Object(widths.release()));
+
+    const std::unique_ptr<FoFiTrueType> fontFile = FoFiTrueType::load(fontSearchResult.filepath.c_str(), fontSearchResult.faceIndex);
+    if (fontFile) {
+        int unicodeBMPCMap = fontFile->findCmap(3, 10);
+        if (unicodeBMPCMap < 0) {
+            unicodeBMPCMap = fontFile->findCmap(0, 3);
+        }
+        if (unicodeBMPCMap < 0) {
+            unicodeBMPCMap = fontFile->findCmap(3, 1);
+        }
+        if (unicodeBMPCMap >= 0) {
+            std::vector<char> cidToGidMap;
+            cidToGidMap.reserve(2 * 65536);
+
+            for (int code = 0; code <= 0xffff; ++code) {
+                const int glyph = fontFile->mapCodeToGID(unicodeBMPCMap, code);
+                cidToGidMap.push_back((char)(glyph >> 8));
+                cidToGidMap.push_back((char)(glyph & 0xff));
+            }
+            const Ref cidToGidMapStream = xref->addStreamObject(new Dict(xref), std::move(cidToGidMap), StreamCompression::Compress);
+            descendantFont->set("CIDToGIDMap", Object(cidToGidMapStream));
+        }
+    }
 
     auto descendantFonts = std::make_unique<Array>(xref);
     descendantFonts->add(Object(descendantFont.release()));
@@ -3607,8 +3637,8 @@ static std::unique_ptr<GfxFont> createAnnotCJKFallbackFont(XRef *xref, Dict *fon
     Dict *fontDict = new Dict(xref);
     fontDict->add("Type", Object(objName, "Font"));
     fontDict->add("Subtype", Object(objName, "Type0"));
-    fontDict->add("BaseFont", Object(objName, fontname));
-    fontDict->add("Encoding", Object(objName, "UniGB-UTF16-H"));
+    fontDict->add("BaseFont", Object(objName, fontName.c_str()));
+    fontDict->add("Encoding", Object(objName, "Identity-H"));
     fontDict->add("DescendantFonts", Object(descendantFonts.release()));
 
     Object fontsDictObj = fontParentDict->lookup("Font");
@@ -3629,8 +3659,8 @@ static void addAnnotFallbackFontsForText(const std::string &text, const GfxFont 
     }
 
     const bool isUnicode = hasUnicodeByteOrderMark(text);
-    std::map<std::string, std::pair<const GfxFont *, std::string>> fontsByName;
-    int fallbackIndex = 0;
+    std::vector<Unicode> fallbackChars;
+    std::optional<UCharFontSearchResult> fallbackFontSearchResult;
     for (size_t i = isUnicode ? 2 : 0; i < text.size(); i += isUnicode ? 2 : 1) {
         if (isUnicode && i + 1 >= text.size()) {
             break;
@@ -3639,22 +3669,31 @@ static void addAnnotFallbackFontsForText(const std::string &text, const GfxFont 
         if (uChar < 0x80) {
             continue;
         }
+        fallbackChars.push_back(uChar);
 
-        const UCharFontSearchResult result = globalParams->findSystemFontFileForUChar(uChar, font);
-        if (result.family.empty()) {
+        if (fallbackFontSearchResult) {
             continue;
         }
-
-        const std::string fontName = result.style.empty() ? result.family : result.family + " " + result.style;
-        auto fontIt = fontsByName.find(fontName);
-        if (fontIt == fontsByName.end()) {
-            const std::string resourceName = "OkularFallbackCJK" + std::to_string(fallbackIndex++);
-            std::unique_ptr<const GfxFont> fallbackFont = createAnnotCJKFallbackFont(xref, fontResDict, resourceName.c_str(), fontName.c_str());
-            const GfxFont *fallbackFontPtr = fallbackFont.get();
-            fallbackFonts.push_back(std::move(fallbackFont));
-            fontIt = fontsByName.emplace(fontName, std::make_pair(fallbackFontPtr, resourceName)).first;
+        const UCharFontSearchResult result = globalParams->findSystemFontFileForUChar(uChar, font);
+        if (result.family.empty() || result.filepath.empty()) {
+            continue;
         }
-        fallbackFontMap.emplace(uChar, fontIt->second);
+        fallbackFontSearchResult.emplace(result);
+    }
+
+    if (!fallbackFontSearchResult) {
+        return;
+    }
+
+    const std::string resourceName = "OkularFallbackCJK0";
+    std::unique_ptr<const GfxFont> fallbackFont = createAnnotFallbackFont(xref, fontResDict, resourceName.c_str(), *fallbackFontSearchResult);
+    if (!fallbackFont) {
+        return;
+    }
+    const GfxFont *fallbackFontPtr = fallbackFont.get();
+    fallbackFonts.push_back(std::move(fallbackFont));
+    for (const Unicode uChar : fallbackChars) {
+        fallbackFontMap.emplace(uChar, std::make_pair(fallbackFontPtr, resourceName));
     }
 }
 

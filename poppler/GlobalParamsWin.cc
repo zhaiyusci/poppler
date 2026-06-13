@@ -177,6 +177,46 @@ static bool FileExists(const char *path)
     return false;
 }
 
+static std::string getWindowsSystemUIFontName()
+{
+    NONCLIENTMETRICSA metrics;
+    metrics.cbSize = sizeof(metrics);
+    if (!SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, metrics.cbSize, &metrics, 0)) {
+        return {};
+    }
+
+    return metrics.lfMessageFont.lfFaceName;
+}
+
+static std::string sysFontStyle(const SysFontInfo *font)
+{
+    std::string style;
+    if (font->italic) {
+        style = "Italic";
+    }
+    if (font->oblique) {
+        if (!style.empty()) {
+            style += " ";
+        }
+        style += "Oblique";
+    }
+    if (font->bold) {
+        if (!style.empty()) {
+            style += " ";
+        }
+        style += "Bold";
+    }
+    return style;
+}
+
+static UCharFontSearchResult sysFontResultForUChar(Unicode uChar, const SysFontInfo *font)
+{
+    if (font && supportedFontForEmbedding(uChar, font->path->c_str(), font->fontNum)) {
+        return UCharFontSearchResult(font->path->toStr(), font->fontNum, font->name->toStr(), sysFontStyle(font));
+    }
+    return {};
+}
+
 void SysFontList::scanWindowsFonts(const std::string &winFontDir)
 {
     OSVERSIONINFO version;
@@ -531,27 +571,21 @@ UCharFontSearchResult GlobalParams::findSystemFontFileForUChar(Unicode uChar, co
     const std::scoped_lock locker(mutex);
     setupBaseFonts(POPPLER_FONTSDIR);
 
+    const std::string systemUIFontName = getWindowsSystemUIFontName();
+    if (!systemUIFontName.empty()) {
+        const SysFontInfo *systemUIFont = sysFonts->find(systemUIFontName, fontToEmulate.isFixedWidth(), false);
+        UCharFontSearchResult result = sysFontResultForUChar(uChar, systemUIFont);
+        if (!result.filepath.empty()) {
+            return result;
+        }
+    }
+
     const std::vector<SysFontInfo *> &fonts = sysFonts->getFonts();
     for (SysFontInfo *f : fonts) {
         // This is not super great given that it ignores fontToEmulate, but will do for now
-        if (supportedFontForEmbedding(uChar, f->path->c_str(), f->fontNum)) {
-            std::string style;
-            if (f->italic) {
-                style = "Italic";
-            }
-            if (f->oblique) {
-                if (!style.empty()) {
-                    style += " ";
-                }
-                style += "Oblique";
-            }
-            if (f->bold) {
-                if (!style.empty()) {
-                    style += " ";
-                }
-                style += "Bold";
-            }
-            return UCharFontSearchResult(f->path->toStr(), f->fontNum, f->name->toStr(), style);
+        UCharFontSearchResult result = sysFontResultForUChar(uChar, f);
+        if (!result.filepath.empty()) {
+            return result;
         }
     }
 
