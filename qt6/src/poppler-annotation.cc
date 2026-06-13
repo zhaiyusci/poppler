@@ -1901,7 +1901,6 @@ void TextAnnotationPrivate::setDefaultAppearanceToNative()
             GooString rcString(rc.toStdString());
             ftextann->setRichContents(&rcString);
         }
-        ftextann->regenerateAppearance();
     }
 }
 
