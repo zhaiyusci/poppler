@@ -88,6 +88,7 @@
 #include "Page.h"
 #include "Annot.h"
 #include "GfxFont.h"
+#include "GlobalParams.h"
 #include "CharCodeToUnicode.h"
 #include "PDFDocEncoding.h"
 #include "Form.h"
@@ -3542,12 +3543,127 @@ static std::unique_ptr<GfxFont> createAnnotDrawFont(XRef *xref, Dict *fontParent
     return GfxFont::makeFont(xref, resourceName, dummyRef, fontDict);
 }
 
+using AnnotFallbackFontMap = std::map<Unicode, std::pair<const GfxFont *, std::string>>;
+
+static Unicode annotTextCharAt(const std::string &text, bool isUnicode, size_t i)
+{
+    if (isUnicode) {
+        return ((unsigned char)text[i] << 8) + (unsigned char)text[i + 1];
+    }
+    return pdfDocEncoding[text[i] & 0xff];
+}
+
+static std::unique_ptr<GfxFont> createAnnotCJKFallbackFont(XRef *xref, Dict *fontParentDict, const char *resourceName, const char *fontname)
+{
+    const Ref dummyRef = { .num = -1, .gen = -1 };
+
+    auto cidSystemInfo = std::make_unique<Dict>(xref);
+    cidSystemInfo->set("Registry", Object(std::make_unique<GooString>("Adobe")));
+    cidSystemInfo->set("Ordering", Object(std::make_unique<GooString>("GB1")));
+    cidSystemInfo->set("Supplement", Object(4));
+
+    auto fontBBox = std::make_unique<Array>(xref);
+    fontBBox->add(Object(-8));
+    fontBBox->add(Object(-164));
+    fontBBox->add(Object(1004));
+    fontBBox->add(Object(859));
+
+    auto fontDescriptor = std::make_unique<Dict>(xref);
+    fontDescriptor->set("Type", Object(objName, "FontDescriptor"));
+    fontDescriptor->set("FontName", Object(objName, fontname));
+    fontDescriptor->set("Flags", Object(32));
+    fontDescriptor->set("FontBBox", Object(fontBBox.release()));
+    fontDescriptor->set("FontFamily", Object(std::make_unique<GooString>(fontname)));
+    fontDescriptor->set("FontStretch", Object(objName, "Normal"));
+    fontDescriptor->set("FontWeight", Object(400));
+    fontDescriptor->set("ItalicAngle", Object(0));
+    fontDescriptor->set("Ascent", Object(859));
+    fontDescriptor->set("Descent", Object(-164));
+    fontDescriptor->set("CapHeight", Object(668));
+    fontDescriptor->set("StemV", Object(52));
+    fontDescriptor->set("XHeight", Object(438));
+
+    auto widths = std::make_unique<Array>(xref);
+    auto cidZeroWidths = std::make_unique<Array>(xref);
+    cidZeroWidths->add(Object(1000));
+    widths->add(Object(0));
+    widths->add(Object(cidZeroWidths.release()));
+    widths->add(Object(1));
+    widths->add(Object(95));
+    widths->add(Object(500));
+
+    auto descendantFont = std::make_unique<Dict>(xref);
+    descendantFont->set("Type", Object(objName, "Font"));
+    descendantFont->set("Subtype", Object(objName, "CIDFontType2"));
+    descendantFont->set("BaseFont", Object(objName, fontname));
+    descendantFont->set("CIDSystemInfo", Object(cidSystemInfo.release()));
+    descendantFont->set("FontDescriptor", Object(fontDescriptor.release()));
+    descendantFont->set("DW", Object(1000));
+    descendantFont->set("W", Object(widths.release()));
+
+    auto descendantFonts = std::make_unique<Array>(xref);
+    descendantFonts->add(Object(descendantFont.release()));
+
+    Dict *fontDict = new Dict(xref);
+    fontDict->add("Type", Object(objName, "Font"));
+    fontDict->add("Subtype", Object(objName, "Type0"));
+    fontDict->add("BaseFont", Object(objName, fontname));
+    fontDict->add("Encoding", Object(objName, "UniGB-UTF16-H"));
+    fontDict->add("DescendantFonts", Object(descendantFonts.release()));
+
+    Object fontsDictObj = fontParentDict->lookup("Font");
+    if (!fontsDictObj.isDict()) {
+        fontsDictObj = Object(new Dict(xref));
+        fontParentDict->add("Font", fontsDictObj.copy()); // This is not a copy it's a ref
+    }
+
+    fontsDictObj.dictSet(resourceName, Object(fontDict));
+
+    return GfxFont::makeFont(xref, resourceName, dummyRef, fontDict);
+}
+
+static void addAnnotFallbackFontsForText(const std::string &text, const GfxFont &font, XRef *xref, Dict *fontResDict, std::vector<std::unique_ptr<const GfxFont>> &fallbackFonts, AnnotFallbackFontMap &fallbackFontMap)
+{
+    if (!globalParams) {
+        return;
+    }
+
+    const bool isUnicode = hasUnicodeByteOrderMark(text);
+    std::map<std::string, std::pair<const GfxFont *, std::string>> fontsByName;
+    int fallbackIndex = 0;
+    for (size_t i = isUnicode ? 2 : 0; i < text.size(); i += isUnicode ? 2 : 1) {
+        if (isUnicode && i + 1 >= text.size()) {
+            break;
+        }
+        const Unicode uChar = annotTextCharAt(text, isUnicode, i);
+        if (uChar < 0x80) {
+            continue;
+        }
+
+        const UCharFontSearchResult result = globalParams->findSystemFontFileForUChar(uChar, font);
+        if (result.family.empty()) {
+            continue;
+        }
+
+        const std::string fontName = result.style.empty() ? result.family : result.family + " " + result.style;
+        auto fontIt = fontsByName.find(fontName);
+        if (fontIt == fontsByName.end()) {
+            const std::string resourceName = "OkularFallbackCJK" + std::to_string(fallbackIndex++);
+            std::unique_ptr<const GfxFont> fallbackFont = createAnnotCJKFallbackFont(xref, fontResDict, resourceName.c_str(), fontName.c_str());
+            const GfxFont *fallbackFontPtr = fallbackFont.get();
+            fallbackFonts.push_back(std::move(fallbackFont));
+            fontIt = fontsByName.emplace(fontName, std::make_pair(fallbackFontPtr, resourceName)).first;
+        }
+        fallbackFontMap.emplace(uChar, fontIt->second);
+    }
+}
+
 class HorizontalTextLayouter
 {
 public:
     HorizontalTextLayouter() = default;
 
-    HorizontalTextLayouter(const GooString *text, const Form *form, const GfxFont *font, std::optional<double> availableWidth, const bool noReencode)
+    HorizontalTextLayouter(const GooString *text, const Form *form, const GfxFont *font, std::optional<double> availableWidth, const bool noReencode, const AnnotFallbackFontMap *fallbackFontMap = nullptr)
     {
         size_t i = 0;
         double blockWidth;
@@ -3557,13 +3673,13 @@ public:
         int charCount;
 
         Annot::layoutText(text, &outputText, &i, *font, &blockWidth, availableWidth ? *availableWidth : 0.0, &charCount, noReencode, !noReencode ? &newFontNeeded : nullptr);
-        data.emplace_back(outputText.toStr(), std::string(), blockWidth, charCount);
+        data.emplace_back(outputText.toStr(), std::string(), blockWidth, charCount, font->getEncodingName() == "UniGB-UTF16-H");
         if (availableWidth) {
             *availableWidth -= blockWidth;
         }
 
         while (newFontNeeded && (!availableWidth || *availableWidth > 0 || (isUnicode && i == 2) || (!isUnicode && i == 0))) {
-            if (!form) {
+            if (!form && (!fallbackFontMap || fallbackFontMap->empty())) {
                 // There's no fonts to look for, so just skip the characters
                 i += isUnicode ? 2 : 1;
                 error(errSyntaxError, -1, "HorizontalTextLayouter, found character that the font can't represent");
@@ -3576,9 +3692,23 @@ public:
                 } else {
                     uChar = pdfDocEncoding[text->getChar(i) & 0xff];
                 }
-                const std::string auxFontName = form->getFallbackFontForChar(uChar, *font);
-                if (!auxFontName.empty()) {
-                    std::shared_ptr<GfxFont> auxFont = form->getDefaultResources()->lookupFont(auxFontName.c_str());
+                const GfxFont *auxFont = nullptr;
+                std::string auxFontName;
+                std::shared_ptr<GfxFont> formAuxFont;
+                if (fallbackFontMap) {
+                    const auto fallbackIt = fallbackFontMap->find(uChar);
+                    if (fallbackIt != fallbackFontMap->end()) {
+                        auxFont = fallbackIt->second.first;
+                        auxFontName = fallbackIt->second.second;
+                    }
+                } else if (form) {
+                    auxFontName = form->getFallbackFontForChar(uChar, *font);
+                    if (!auxFontName.empty()) {
+                        formAuxFont = form->getDefaultResources()->lookupFont(auxFontName.c_str());
+                        auxFont = formAuxFont.get();
+                    }
+                }
+                if (!auxFontName.empty() && auxFont) {
 
                     // Here we just layout one char, we don't know if the one afterwards can be layouted with the original font
                     GooString auxContents = GooString(text->toStr().substr(i, isUnicode ? 2 : 1));
@@ -3597,7 +3727,7 @@ public:
                     // because it is assumed we at least layout one character
                     if (!availableWidth || *availableWidth > 0 || (isUnicode && i == 2) || (!isUnicode && i == 0)) {
                         i += isUnicode ? 2 : 1;
-                        data.emplace_back(outputText.toStr(), auxFontName, blockWidth, charCount);
+                        data.emplace_back(outputText.toStr(), auxFontName, blockWidth, charCount, auxFont->getEncodingName() == "UniGB-UTF16-H");
                     }
                 } else {
                     error(errSyntaxError, -1, "HorizontalTextLayouter, couldn't find a font for character U+{0:04uX}", uChar);
@@ -3614,7 +3744,7 @@ public:
                 // layoutText will always at least layout one character even if it doesn't fit in
                 // the given space which makes sense (except in the case of switching fonts, so we control if we ran out of space here manually)
                 if (!availableWidth || *availableWidth > 0) {
-                    data.emplace_back(outputText.toStr(), std::string(), blockWidth, charCount);
+                    data.emplace_back(outputText.toStr(), std::string(), blockWidth, charCount, font->getEncodingName() == "UniGB-UTF16-H");
                 } else {
                     i -= isUnicode ? 2 : 1;
                 }
@@ -3646,12 +3776,13 @@ public:
 
     struct Data
     {
-        Data(std::string t, std::string fName, double w, int cc) : text(std::move(t)), fontName(std::move(fName)), width(w), charCount(cc) { }
+        Data(std::string t, std::string fName, double w, int cc, bool hex) : text(std::move(t)), fontName(std::move(fName)), width(w), charCount(cc), writeHexString(hex) { }
 
         const std::string text;
         const std::string fontName;
         const double width;
         const int charCount;
+        const bool writeHexString;
     };
 
     std::vector<Data> data;
@@ -3697,7 +3828,7 @@ struct DrawMultiLineTextResult
 // if fontName is empty it is assumed it is sent from the outside
 // so for text that is in font no Tf is added and for text that is in the aux fonts
 // a pair of q/Q is added
-static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double availableWidth, const Form *form, const GfxFont &font, const std::string &fontName, double fontSize, VariableTextQuadding quadding, double borderWidth)
+static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double availableWidth, const Form *form, const GfxFont &font, const std::string &fontName, double fontSize, VariableTextQuadding quadding, double borderWidth, const AnnotFallbackFontMap *fallbackFontMap = nullptr)
 {
     DrawMultiLineTextResult result;
     size_t i = 0;
@@ -3708,7 +3839,7 @@ static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double
         if (!hasUnicodeByteOrderMark(lineText.toStr()) && hasUnicodeByteOrderMark(text)) {
             prependUnicodeByteOrderMark(lineText.toNonConstStr());
         }
-        const HorizontalTextLayouter textLayouter(&lineText, form, &font, availableTextWidthInFontPtSize, false);
+        const HorizontalTextLayouter textLayouter(&lineText, form, &font, availableTextWidthInFontPtSize, false, fallbackFontMap);
 
         const double totalWidth = textLayouter.totalWidth() * fontSize;
 
@@ -3743,7 +3874,7 @@ static DrawMultiLineTextResult drawMultiLineText(const std::string &text, double
             const double xDiff = first ? xPos - xPosPrev : prevBlockWidth;
 
             builder.appendf("{0:.2f} {1:.2f} Td\n", xDiff, yDiff);
-            if (font.getEncodingName() == "UniGB-UTF16-H") {
+            if (d.writeHexString) {
                 builder.writeHexString(d.text);
             } else {
                 builder.writeString(d.text);
@@ -3886,12 +4017,20 @@ void AnnotFreeText::generateFreeTextAppearance(bool persist)
     appearBuilder.appendf("{0:.2f} {1:.2f} {2:.2f} {3:.2f} re W n\n", boxX + textmargin, boxY + textmargin, textwidth, textheight);
 
     std::unique_ptr<const GfxFont> font = nullptr;
+    std::vector<std::unique_ptr<const GfxFont>> transientFallbackFonts;
+    AnnotFallbackFontMap transientFallbackFontMap;
 
-    // look for font name in the default resources
     Form *form = doc->getCatalog()->getForm(); // form is owned by catalog, no need to clean it up
 
     Object resourceObj;
-    if (form && form->getDefaultResourcesObj() && form->getDefaultResourcesObj()->isDict()) {
+    if (!persist) {
+        Dict *fontResDict = new Dict(doc->getXRef());
+        resourceObj = Object(fontResDict);
+        font = createAnnotDrawFont(doc->getXRef(), fontResDict, da.getFontName().c_str(), determineFallbackFont(da.getFontName(), "Helvetica"));
+        addAnnotFallbackFontsForText(contents->toStr(), *font, doc->getXRef(), fontResDict, transientFallbackFonts, transientFallbackFontMap);
+        form = nullptr;
+    } else if (form && form->getDefaultResourcesObj() && form->getDefaultResourcesObj()->isDict()) {
+        // look for font name in the default resources
         resourceObj = form->getDefaultResourcesObj()->copy(); // No real copy, but increment refcount of /DR Dict
 
         Dict *resDict = resourceObj.getDict();
@@ -3923,7 +4062,7 @@ void AnnotFreeText::generateFreeTextAppearance(bool persist)
     // Set font state
     appearBuilder.setDrawColor(*da.getFontColor(), true);
     appearBuilder.appendf("BT 1 0 0 1 {0:.2f} {1:.2f} Tm\n", boxX + textmargin, boxY + boxHeight - textmargin);
-    const DrawMultiLineTextResult textCommands = drawMultiLineText(contents->toStr(), textwidth, form, *font, da.getFontName(), da.getFontPtSize(), quadding, 0 /*borderWidth*/);
+    const DrawMultiLineTextResult textCommands = drawMultiLineText(contents->toStr(), textwidth, form, *font, da.getFontName(), da.getFontPtSize(), quadding, 0 /*borderWidth*/, transientFallbackFontMap.empty() ? nullptr : &transientFallbackFontMap);
     appearBuilder.append(textCommands.text.c_str());
     appearBuilder.append("ET Q\n");
 

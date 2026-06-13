@@ -1102,9 +1102,9 @@ private:
     int faceIndex;
 };
 
-static bool isCJKUnicode(Unicode u)
+static bool shouldUseUnicodeFallback(Unicode u)
 {
-    return (u >= 0x2E80 && u <= 0x9FFF) || (u >= 0xF900 && u <= 0xFAFF);
+    return u >= 0x80 && u <= 0xffff;
 }
 
 static std::vector<int> buildBMPUnicodeToGIDMap(const std::string &fontFile, int faceIndex)
@@ -1139,9 +1139,9 @@ static std::vector<int> buildBMPUnicodeToGIDMap(const std::string &fontFile, int
     return codeToGID;
 }
 
-static SplashFont *getCJKFallbackFont(SplashFontEngine *fontEngine, GfxState *state, Unicode uChar, const std::array<SplashCoord, 6> &ctm)
+static SplashFont *getUnicodeFallbackFont(SplashFontEngine *fontEngine, GfxState *state, Unicode uChar, const std::array<SplashCoord, 6> &ctm)
 {
-    if (!fontEngine || !state || !state->getFont()) {
+    if (!fontEngine || !state || !state->getFont() || !shouldUseUnicodeFallback(uChar)) {
         return nullptr;
     }
 
@@ -2244,8 +2244,8 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
 
     drawFont = font;
     drawCode = code;
-    if (uLen == 1 && isCJKUnicode(u[0]) && state->getFont() && !state->getFont()->isCIDFont()) {
-        if (SplashFont *fallbackFont = getCJKFallbackFont(fontEngine, state, u[0], splash->getMatrix())) {
+    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && state->getFont() && !state->getFont()->isCIDFont()) {
+        if (SplashFont *fallbackFont = getUnicodeFallbackFont(fontEngine, state, u[0], splash->getMatrix())) {
             drawFont = fallbackFont;
             drawCode = u[0];
         }
