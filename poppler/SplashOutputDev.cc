@@ -2244,7 +2244,7 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
 
     drawFont = font;
     drawCode = code;
-    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && state->getFont() && !state->getFont()->isCIDFont()) {
+    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && state->getFont() && !state->getFont()->isCIDFont() && !state->getFont()->isSymbolic()) {
         if (SplashFont *fallbackFont = getUnicodeFallbackFont(fontEngine, state, u[0], splash->getMatrix())) {
             drawFont = fallbackFont;
             drawCode = u[0];
