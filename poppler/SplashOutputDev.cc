@@ -1107,6 +1107,16 @@ static bool shouldUseUnicodeFallback(Unicode u)
     return u >= 0x80 && u <= 0xffff;
 }
 
+static bool shouldUseUnicodeFallbackForFont(const std::shared_ptr<GfxFont> &font)
+{
+    if (!font || font->isCIDFont() || font->isSymbolic()) {
+        return false;
+    }
+
+    Ref embeddedFontID;
+    return !font->getEmbeddedFontID(&embeddedFontID);
+}
+
 static std::vector<int> buildBMPUnicodeToGIDMap(const std::string &fontFile, int faceIndex)
 {
     std::vector<int> codeToGID(65536, 0);
@@ -2244,7 +2254,7 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
 
     drawFont = font;
     drawCode = code;
-    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && state->getFont() && !state->getFont()->isCIDFont() && !state->getFont()->isSymbolic()) {
+    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && shouldUseUnicodeFallbackForFont(state->getFont())) {
         if (SplashFont *fallbackFont = getUnicodeFallbackFont(fontEngine, state, u[0], splash->getMatrix())) {
             drawFont = fallbackFont;
             drawCode = u[0];
