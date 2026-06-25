@@ -171,3 +171,17 @@ add_executable(pdfunite ${pdfunite_SOURCES})
 target_link_libraries(pdfunite ${common_libs})
 install(TARGETS pdfunite DESTINATION bin)
 install(FILES pdfunite.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+# scholia-pdfpages
+add_library(scholia_pdfpages STATIC
+  ScholiaPdfPages.cc
+  ScholiaPdfPages.h
+)
+target_link_libraries(scholia_pdfpages ${common_libs})
+
+set(scholia_pdfpages_SOURCES ${common_srcs}
+  scholia-pdfpages.cc
+)
+add_executable(scholia-pdfpages ${scholia_pdfpages_SOURCES})
+target_link_libraries(scholia-pdfpages scholia_pdfpages)
+install(TARGETS scholia-pdfpages DESTINATION bin)
