@@ -37,6 +37,7 @@ struct Result
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
+Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 
 }
 

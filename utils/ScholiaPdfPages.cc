@@ -183,6 +183,8 @@ struct PageSequenceEdit
 {
     int insertBlankAfter = -1;
     int deletePage = -1;
+    int movePageFrom = -1;
+    int movePageTo = -1;
 };
 
 ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
@@ -211,6 +213,14 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         error(errSyntaxError, -1, "The input PDF has no pages.");
         return makeError(ScholiaPdfPages::Error::DamagedInput, "The input PDF has no pages.");
     }
+
+    const bool wantsInsert = edit.insertBlankAfter >= 0;
+    const bool wantsDelete = edit.deletePage >= 0;
+    const bool wantsMove = edit.movePageFrom >= 0 || edit.movePageTo >= 0;
+    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) != 1) {
+        error(errCommandLine, -1, "Exactly one page edit operation must be specified.");
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
+    }
     if (edit.insertBlankAfter >= 0 && (edit.insertBlankAfter > pageCount)) {
         error(errCommandLine, -1, "The insertion point must be between 0 and {0:d}.", pageCount);
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The insertion point is outside the document page range.", pageCount);
@@ -222,6 +232,10 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     if (edit.deletePage >= 0 && pageCount == 1) {
         error(errCommandLine, -1, "The only page in the document cannot be deleted.");
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The only page in the document cannot be deleted.", pageCount);
+    }
+    if (wantsMove && (edit.movePageFrom < 1 || edit.movePageFrom > pageCount || edit.movePageTo < 1 || edit.movePageTo > pageCount)) {
+        error(errCommandLine, -1, "The page move source and destination must be between 1 and {0:d}.", pageCount);
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
     }
 
     FILE *file = std::fopen(outputFileName.c_str(), "wb");
@@ -244,13 +258,31 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     Object ocProperties;
     Object names;
     std::vector<PageEntry> pages;
+    std::vector<int> pageOrder;
+    pageOrder.reserve(pageCount);
+    if (wantsMove) {
+        for (int pageNo = 1; pageNo <= pageCount; ++pageNo) {
+            if (pageNo != edit.movePageFrom) {
+                pageOrder.push_back(pageNo);
+            }
+        }
+        pageOrder.insert(pageOrder.begin() + (edit.movePageTo - 1), edit.movePageFrom);
+    } else {
+        for (int pageNo = 1; pageNo <= pageCount; ++pageNo) {
+            pageOrder.push_back(pageNo);
+        }
+    }
+
     bool ok = markCatalogObjects(doc.get(), yRef, countRef, &intents, &acroForm, &ocProperties, &names);
 
     if (ok && edit.insertBlankAfter == 0) {
         ok = appendBlankPageLike(doc.get(), 1, yRef, &pages);
     }
 
-    for (int pageNo = 1; ok && pageNo <= pageCount; ++pageNo) {
+    for (int pageNo : pageOrder) {
+        if (!ok) {
+            break;
+        }
         if (pageNo != edit.deletePage) {
             ok = appendExistingPage(doc.get(), pageNo, yRef, countRef, &pages);
         }
@@ -351,12 +383,17 @@ namespace ScholiaPdfPages
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { pageNumber, -1 });
+    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { pageNumber, -1, -1, -1 });
 }
 
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, pageNumber });
+    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, pageNumber, -1, -1 });
+}
+
+Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber)
+{
+    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, -1, sourcePageNumber, destinationPageNumber });
 }
 
 }
