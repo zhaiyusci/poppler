@@ -179,7 +179,13 @@ bool appendBlankPageLike(PDFDoc *doc, int referencePageNo, XRef *xref, std::vect
     return true;
 }
 
-ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, int insertBlankAfter)
+struct PageSequenceEdit
+{
+    int insertBlankAfter = -1;
+    int deletePage = -1;
+};
+
+ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
 {
     if (inputFileName.empty() || outputFileName.empty()) {
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "Input and output file names must not be empty.");
@@ -205,9 +211,17 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         error(errSyntaxError, -1, "The input PDF has no pages.");
         return makeError(ScholiaPdfPages::Error::DamagedInput, "The input PDF has no pages.");
     }
-    if (insertBlankAfter < 0 || insertBlankAfter > pageCount) {
+    if (edit.insertBlankAfter >= 0 && (edit.insertBlankAfter > pageCount)) {
         error(errCommandLine, -1, "The insertion point must be between 0 and {0:d}.", pageCount);
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The insertion point is outside the document page range.", pageCount);
+    }
+    if (edit.deletePage >= 0 && (edit.deletePage < 1 || edit.deletePage > pageCount)) {
+        error(errCommandLine, -1, "The page to delete must be between 1 and {0:d}.", pageCount);
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page to delete is outside the document page range.", pageCount);
+    }
+    if (edit.deletePage >= 0 && pageCount == 1) {
+        error(errCommandLine, -1, "The only page in the document cannot be deleted.");
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The only page in the document cannot be deleted.", pageCount);
     }
 
     FILE *file = std::fopen(outputFileName.c_str(), "wb");
@@ -232,13 +246,15 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     std::vector<PageEntry> pages;
     bool ok = markCatalogObjects(doc.get(), yRef, countRef, &intents, &acroForm, &ocProperties, &names);
 
-    if (ok && insertBlankAfter == 0) {
+    if (ok && edit.insertBlankAfter == 0) {
         ok = appendBlankPageLike(doc.get(), 1, yRef, &pages);
     }
 
     for (int pageNo = 1; ok && pageNo <= pageCount; ++pageNo) {
-        ok = appendExistingPage(doc.get(), pageNo, yRef, countRef, &pages);
-        if (ok && pageNo == insertBlankAfter) {
+        if (pageNo != edit.deletePage) {
+            ok = appendExistingPage(doc.get(), pageNo, yRef, countRef, &pages);
+        }
+        if (ok && pageNo == edit.insertBlankAfter) {
             ok = appendBlankPageLike(doc.get(), pageNo, yRef, &pages);
         }
     }
@@ -335,7 +351,12 @@ namespace ScholiaPdfPages
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, pageNumber);
+    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { pageNumber, -1 });
+}
+
+Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
+{
+    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, pageNumber });
 }
 
 }
