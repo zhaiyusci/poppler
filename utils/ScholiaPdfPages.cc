@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <GlobalParams.h>
@@ -120,7 +121,7 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     return true;
 }
 
-bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, std::vector<PageEntry> *pages)
+bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, unsigned int numOffset, std::vector<PageEntry> *pages)
 {
     Page *pageInfo = doc->getCatalog()->getPage(pageNo);
     if (!pageInfo) {
@@ -152,18 +153,23 @@ bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, std
         pageDict->set("Resources", resources->copy());
     }
 
-    if (!doc->markPageObjects(pageDict, yRef, countRef, 0, refPage->num, refPage->num)) {
+    if (!doc->markPageObjects(pageDict, yRef, countRef, numOffset, refPage->num, refPage->num)) {
         error(errSyntaxError, -1, "PDFDoc::markPageObjects failed for page {0:d}.", pageNo);
         return false;
     }
 
     Object annotsObj = pageDict->lookupNF("Annots").copy();
     if (!annotsObj.isNull()) {
-        doc->markAnnotations(&annotsObj, yRef, countRef, 0, refPage->num, refPage->num);
+        doc->markAnnotations(&annotsObj, yRef, countRef, numOffset, refPage->num, refPage->num);
     }
 
-    pages->push_back(PageEntry { std::move(page), 0 });
+    pages->push_back(PageEntry { std::move(page), numOffset });
     return true;
+}
+
+bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, std::vector<PageEntry> *pages)
+{
+    return appendExistingPage(doc, pageNo, yRef, countRef, 0, pages);
 }
 
 bool appendBlankPageLike(PDFDoc *doc, int referencePageNo, XRef *xref, std::vector<PageEntry> *pages)
@@ -179,9 +185,26 @@ bool appendBlankPageLike(PDFDoc *doc, int referencePageNo, XRef *xref, std::vect
     return true;
 }
 
+bool appendBlankPageWithSize(double width, double height, XRef *xref, std::vector<PageEntry> *pages)
+{
+    if (width <= 0 || height <= 0) {
+        error(errCommandLine, -1, "Blank page width and height must be positive.");
+        return false;
+    }
+
+    const PDFRectangle mediaBox(0, 0, width, height);
+    pages->push_back(PageEntry { makeBlankPage(xref, &mediaBox, nullptr, 0), 0 });
+    return true;
+}
+
 struct PageSequenceEdit
 {
     int insertBlankAfter = -1;
+    double blankWidth = 0;
+    double blankHeight = 0;
+    int insertPdfPageAfter = -1;
+    std::string insertPdfFileName;
+    int insertPdfPage = -1;
     int deletePage = -1;
     int movePageFrom = -1;
     int movePageTo = -1;
@@ -215,15 +238,24 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     }
 
     const bool wantsInsert = edit.insertBlankAfter >= 0;
+    const bool wantsInsertPdfPage = edit.insertPdfPageAfter >= 0;
     const bool wantsDelete = edit.deletePage >= 0;
     const bool wantsMove = edit.movePageFrom >= 0 || edit.movePageTo >= 0;
-    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) != 1) {
+    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) != 1) {
         error(errCommandLine, -1, "Exactly one page edit operation must be specified.");
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
     }
     if (edit.insertBlankAfter >= 0 && (edit.insertBlankAfter > pageCount)) {
         error(errCommandLine, -1, "The insertion point must be between 0 and {0:d}.", pageCount);
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The insertion point is outside the document page range.", pageCount);
+    }
+    if (edit.insertBlankAfter >= 0 && (edit.blankWidth < 0 || edit.blankHeight < 0 || (edit.blankWidth == 0 && edit.blankHeight > 0) || (edit.blankWidth > 0 && edit.blankHeight == 0))) {
+        error(errCommandLine, -1, "Both blank page width and height must be specified, or neither.");
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Both blank page width and height must be specified, or neither.", pageCount);
+    }
+    if (edit.insertPdfPageAfter >= 0 && (edit.insertPdfPageAfter > pageCount || edit.insertPdfFileName.empty() || edit.insertPdfPage < 1)) {
+        error(errCommandLine, -1, "The imported page insertion arguments are invalid.");
+        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The imported page insertion arguments are invalid.", pageCount);
     }
     if (edit.deletePage >= 0 && (edit.deletePage < 1 || edit.deletePage > pageCount)) {
         error(errCommandLine, -1, "The page to delete must be between 1 and {0:d}.", pageCount);
@@ -238,6 +270,25 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
     }
 
+    std::unique_ptr<PDFDoc> insertedDoc;
+    int insertedDocPageCount = 0;
+    if (wantsInsertPdfPage) {
+        insertedDoc = std::make_unique<PDFDoc>(std::make_unique<GooString>(edit.insertPdfFileName));
+        if (!insertedDoc->isOk() || !insertedDoc->getXRef()->getCatalog().isDict()) {
+            error(errSyntaxError, -1, "Could not edit damaged imported file ('{0:s}').", edit.insertPdfFileName.c_str());
+            return makeError(ScholiaPdfPages::Error::DamagedInput, "Could not read imported PDF page.", pageCount);
+        }
+        if (insertedDoc->isEncrypted()) {
+            error(errUnimplemented, -1, "Could not edit encrypted imported file ('{0:s}').", edit.insertPdfFileName.c_str());
+            return makeError(ScholiaPdfPages::Error::EncryptedInput, "Could not import a page from an encrypted PDF.", pageCount);
+        }
+        insertedDocPageCount = insertedDoc->getNumPages();
+        if (edit.insertPdfPage > insertedDocPageCount) {
+            error(errCommandLine, -1, "The imported page number must be between 1 and {0:d}.", insertedDocPageCount);
+            return makeError(ScholiaPdfPages::Error::InvalidArguments, "The imported page is outside the source PDF page range.", pageCount);
+        }
+    }
+
     FILE *file = std::fopen(outputFileName.c_str(), "wb");
     if (!file) {
         error(errIO, -1, "Could not open file '{0:s}'.", outputFileName.c_str());
@@ -249,8 +300,12 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     auto *countRef = new XRef();
     yRef->add(0, 65535, 0, false);
 
-    const int majorVersion = doc->getPDFMajorVersion();
-    const int minorVersion = doc->getPDFMinorVersion();
+    int majorVersion = doc->getPDFMajorVersion();
+    int minorVersion = doc->getPDFMinorVersion();
+    if (insertedDoc && (insertedDoc->getPDFMajorVersion() > majorVersion || (insertedDoc->getPDFMajorVersion() == majorVersion && insertedDoc->getPDFMinorVersion() > minorVersion))) {
+        majorVersion = insertedDoc->getPDFMajorVersion();
+        minorVersion = insertedDoc->getPDFMinorVersion();
+    }
     PDFDoc::writeHeader(outStr, majorVersion, minorVersion);
 
     Object intents;
@@ -276,8 +331,10 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     bool ok = markCatalogObjects(doc.get(), yRef, countRef, &intents, &acroForm, &ocProperties, &names);
 
     if (ok && edit.insertBlankAfter == 0) {
-        ok = appendBlankPageLike(doc.get(), 1, yRef, &pages);
+        ok = edit.blankWidth > 0 ? appendBlankPageWithSize(edit.blankWidth, edit.blankHeight, yRef, &pages) : appendBlankPageLike(doc.get(), 1, yRef, &pages);
     }
+
+    int insertPdfPageIndex = wantsInsertPdfPage && edit.insertPdfPageAfter == 0 ? 0 : -1;
 
     for (int pageNo : pageOrder) {
         if (!ok) {
@@ -287,13 +344,26 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
             ok = appendExistingPage(doc.get(), pageNo, yRef, countRef, &pages);
         }
         if (ok && pageNo == edit.insertBlankAfter) {
-            ok = appendBlankPageLike(doc.get(), pageNo, yRef, &pages);
+            ok = edit.blankWidth > 0 ? appendBlankPageWithSize(edit.blankWidth, edit.blankHeight, yRef, &pages) : appendBlankPageLike(doc.get(), pageNo, yRef, &pages);
+        }
+        if (ok && pageNo == edit.insertPdfPageAfter) {
+            insertPdfPageIndex = static_cast<int>(pages.size());
         }
     }
 
     int objectsCount = 0;
     if (ok) {
         objectsCount += doc->writePageObjects(outStr, yRef, 0, true);
+
+        if (insertedDoc && insertPdfPageIndex >= 0) {
+            const unsigned int numOffset = yRef->getNumObjects() + 1;
+            std::vector<PageEntry> insertedPages;
+            ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages);
+            if (ok) {
+                objectsCount += insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
+                pages.insert(pages.begin() + insertPdfPageIndex, std::move(insertedPages.front()));
+            }
+        }
 
         const int rootNum = yRef->getNumObjects() + 1;
         yRef->add(rootNum, 0, outStr->getPos(), true);
@@ -383,17 +453,42 @@ namespace ScholiaPdfPages
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { pageNumber, -1, -1, -1 });
+    PageSequenceEdit edit;
+    edit.insertBlankAfter = pageNumber;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, double width, double height)
+{
+    PageSequenceEdit edit;
+    edit.insertBlankAfter = pageNumber;
+    edit.blankWidth = width;
+    edit.blankHeight = height;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert)
+{
+    PageSequenceEdit edit;
+    edit.insertPdfPageAfter = pageNumber;
+    edit.insertPdfFileName = insertedFileName;
+    edit.insertPdfPage = pageToInsert;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, pageNumber, -1, -1 });
+    PageSequenceEdit edit;
+    edit.deletePage = pageNumber;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber)
 {
-    return writePageSequence(inputFileName, outputFileName, PageSequenceEdit { -1, -1, sourcePageNumber, destinationPageNumber });
+    PageSequenceEdit edit;
+    edit.movePageFrom = sourcePageNumber;
+    edit.movePageTo = destinationPageNumber;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
 }

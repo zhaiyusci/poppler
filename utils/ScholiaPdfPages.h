@@ -36,6 +36,8 @@ struct Result
 };
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
+Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, double width, double height);
+Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert);
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 
