@@ -160,6 +160,26 @@ bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, uns
 
     Object annotsObj = pageDict->lookupNF("Annots").copy();
     if (!annotsObj.isNull()) {
+        Object annots = annotsObj.fetch(doc->getXRef());
+        if (annots.isArray()) {
+            Array *array = annots.getArray();
+            for (int i = 0; i < array->getLength(); ++i) {
+                Object annot = array->get(i);
+                if (!annot.isDict()) {
+                    continue;
+                }
+                Dict *annotDict = annot.getDict();
+                Object type = annotDict->lookup("Type");
+                Object subType = annotDict->lookup("Subtype");
+                if ((type.isName() && std::strcmp(type.getName(), "Annot") == 0) || !subType.isNull()) {
+                    annotDict->remove("P");
+                    Object annotRef = array->getNF(i).copy();
+                    if (annotRef.isRef()) {
+                        doc->getXRef()->setModifiedObject(&annot, annotRef.getRef());
+                    }
+                }
+            }
+        }
         doc->markAnnotations(&annotsObj, yRef, countRef, numOffset, refPage->num, refPage->num);
     }
 
