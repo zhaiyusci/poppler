@@ -1846,7 +1846,7 @@ bool PDFDoc::markAnnotations(Object *annotsObj, XRef *xRef, XRef *countRef, unsi
                 Dict *dict = obj1.getDict();
                 Object type = dict->lookup("Type");
                 if (type.isNull()) {
-                    Object subType = dict->lookup("SubType");
+                    Object subType = dict->lookup("Subtype");
                     // Type is optional, subtype is required
                     // If neither of them exists, something is probably
                     // weird here, so let us just skip this entry

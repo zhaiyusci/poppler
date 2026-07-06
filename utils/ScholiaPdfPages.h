@@ -10,6 +10,7 @@
 #define SCHOLIA_PDFPAGES_H
 
 #include <string>
+#include <vector>
 
 namespace ScholiaPdfPages
 {
@@ -40,6 +41,7 @@ Result insertBlankPageAfter(const std::string &inputFileName, const std::string 
 Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert);
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
+Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);
 
 }
 

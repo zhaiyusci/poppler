@@ -228,6 +228,7 @@ struct PageSequenceEdit
     int deletePage = -1;
     int movePageFrom = -1;
     int movePageTo = -1;
+    std::vector<int> pageOrder;
 };
 
 ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
@@ -261,7 +262,8 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     const bool wantsInsertPdfPage = edit.insertPdfPageAfter >= 0;
     const bool wantsDelete = edit.deletePage >= 0;
     const bool wantsMove = edit.movePageFrom >= 0 || edit.movePageTo >= 0;
-    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) != 1) {
+    const bool wantsReorder = !edit.pageOrder.empty();
+    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) + static_cast<int>(wantsReorder) != 1) {
         error(errCommandLine, -1, "Exactly one page edit operation must be specified.");
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
     }
@@ -288,6 +290,20 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     if (wantsMove && (edit.movePageFrom < 1 || edit.movePageFrom > pageCount || edit.movePageTo < 1 || edit.movePageTo > pageCount)) {
         error(errCommandLine, -1, "The page move source and destination must be between 1 and {0:d}.", pageCount);
         return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
+    }
+    if (wantsReorder) {
+        if (static_cast<int>(edit.pageOrder.size()) != pageCount) {
+            error(errCommandLine, -1, "The page order must contain exactly {0:d} pages.", pageCount);
+            return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page order length does not match the document page count.", pageCount);
+        }
+        std::vector<bool> seen(pageCount + 1, false);
+        for (int pageNo : edit.pageOrder) {
+            if (pageNo < 1 || pageNo > pageCount || seen[pageNo]) {
+                error(errCommandLine, -1, "The page order must be a permutation of 1 through {0:d}.", pageCount);
+                return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page order is not a valid page permutation.", pageCount);
+            }
+            seen[pageNo] = true;
+        }
     }
 
     std::unique_ptr<PDFDoc> insertedDoc;
@@ -335,7 +351,9 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     std::vector<PageEntry> pages;
     std::vector<int> pageOrder;
     pageOrder.reserve(pageCount);
-    if (wantsMove) {
+    if (wantsReorder) {
+        pageOrder = std::move(edit.pageOrder);
+    } else if (wantsMove) {
         for (int pageNo = 1; pageNo <= pageCount; ++pageNo) {
             if (pageNo != edit.movePageFrom) {
                 pageOrder.push_back(pageNo);
@@ -371,16 +389,15 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         }
     }
 
-    int objectsCount = 0;
     if (ok) {
-        objectsCount += doc->writePageObjects(outStr, yRef, 0, true);
+        doc->writePageObjects(outStr, yRef, 0, true);
 
         if (insertedDoc && insertPdfPageIndex >= 0) {
             const unsigned int numOffset = yRef->getNumObjects() + 1;
             std::vector<PageEntry> insertedPages;
             ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages);
             if (ok) {
-                objectsCount += insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
+                insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
                 pages.insert(pages.begin() + insertPdfPageIndex, std::move(insertedPages.front()));
             }
         }
@@ -412,7 +429,6 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
             PDFDoc::writeObject(&names, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
         }
         outStr->printf(">>\nendobj\n");
-        objectsCount++;
 
         yRef->add(rootNum + 1, 0, outStr->getPos(), true);
         outStr->printf("%d 0 obj\n", rootNum + 1);
@@ -421,7 +437,6 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
             outStr->printf(" %zu 0 R", rootNum + i + 2);
         }
         outStr->printf(" ] /Count %zu >>\nendobj\n", pages.size());
-        objectsCount++;
 
         for (std::size_t i = 0; i < pages.size(); ++i) {
             yRef->add(rootNum + static_cast<int>(i) + 2, 0, outStr->getPos(), true);
@@ -442,14 +457,14 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
                 }
             }
             outStr->printf(" >>\nendobj\n");
-            objectsCount++;
         }
 
         const Goffset xrefOffset = outStr->getPos();
         Ref rootRef;
         rootRef.num = rootNum;
         rootRef.gen = 0;
-        Object trailerDict = PDFDoc::createTrailerDict(objectsCount, false, 0, &rootRef, yRef, outputFileName.c_str(), outStr->getPos());
+        const int xrefSize = yRef->getNumObjects();
+        Object trailerDict = PDFDoc::createTrailerDict(xrefSize, false, 0, &rootRef, yRef, outputFileName.c_str(), outStr->getPos());
         PDFDoc::writeXRefTableTrailer(std::move(trailerDict), yRef, true, xrefOffset, outStr, yRef);
     }
 
@@ -508,6 +523,13 @@ Result movePage(const std::string &inputFileName, const std::string &outputFileN
     PageSequenceEdit edit;
     edit.movePageFrom = sourcePageNumber;
     edit.movePageTo = destinationPageNumber;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder)
+{
+    PageSequenceEdit edit;
+    edit.pageOrder = pageOrder;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
