@@ -121,7 +121,7 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     return true;
 }
 
-bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, unsigned int numOffset, std::vector<PageEntry> *pages)
+bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, unsigned int numOffset, std::vector<PageEntry> *pages, bool resetAnnotationUniqueNames = false)
 {
     Page *pageInfo = doc->getCatalog()->getPage(pageNo);
     if (!pageInfo) {
@@ -173,6 +173,9 @@ bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, uns
                 Object subType = annotDict->lookup("Subtype");
                 if ((type.isName() && std::strcmp(type.getName(), "Annot") == 0) || !subType.isNull()) {
                     annotDict->remove("P");
+                    if (resetAnnotationUniqueNames) {
+                        annotDict->remove("NM");
+                    }
                     Object annotRef = array->getNF(i).copy();
                     if (annotRef.isRef()) {
                         doc->getXRef()->setModifiedObject(&annot, annotRef.getRef());
@@ -395,7 +398,7 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         if (insertedDoc && insertPdfPageIndex >= 0) {
             const unsigned int numOffset = yRef->getNumObjects() + 1;
             std::vector<PageEntry> insertedPages;
-            ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages);
+            ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages, true);
             if (ok) {
                 insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
                 pages.insert(pages.begin() + insertPdfPageIndex, std::move(insertedPages.front()));
