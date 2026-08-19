@@ -172,16 +172,16 @@ target_link_libraries(pdfunite ${common_libs})
 install(TARGETS pdfunite DESTINATION bin)
 install(FILES pdfunite.1 DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
-# scholia-pdfpages
-add_library(scholia_pdfpages STATIC
-  ScholiaPdfPages.cc
-  ScholiaPdfPages.h
+# pdfpagesequence
+add_library(pdf_page_sequence_editor STATIC
+  PdfPageSequenceEditor.cc
+  PdfPageSequenceEditor.h
 )
-target_link_libraries(scholia_pdfpages ${common_libs})
+target_link_libraries(pdf_page_sequence_editor ${common_libs})
 
-set(scholia_pdfpages_SOURCES ${common_srcs}
-  scholia-pdfpages.cc
+set(pdf_page_sequence_editor_SOURCES ${common_srcs}
+  pdfpagesequence.cc
 )
-add_executable(scholia-pdfpages ${scholia_pdfpages_SOURCES})
-target_link_libraries(scholia-pdfpages scholia_pdfpages)
-install(TARGETS scholia-pdfpages DESTINATION bin)
+add_executable(pdfpagesequence ${pdf_page_sequence_editor_SOURCES})
+target_link_libraries(pdfpagesequence pdf_page_sequence_editor)
+install(TARGETS pdfpagesequence DESTINATION bin)

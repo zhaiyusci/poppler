@@ -1,15 +1,15 @@
 //========================================================================
 //
-// ScholiaPdfPages.cc
+// PdfPageSequenceEditor.cc
 //
 // This file is licensed under the GPLv2 or later
 //
-// A small page-sequence editing library for Scholia.  This intentionally
-// lives next to pdfunite instead of changing Poppler's core ABI.
+// A small page-sequence editing library. This intentionally lives next to
+// pdfunite instead of changing Poppler's core ABI.
 //
 //========================================================================
 
-#include "ScholiaPdfPages.h"
+#include "PdfPageSequenceEditor.h"
 
 #include "config.h"
 #include <poppler-config.h>
@@ -38,9 +38,9 @@ struct PageEntry
     unsigned int numOffset = 0;
 };
 
-ScholiaPdfPages::Result makeError(ScholiaPdfPages::Error error, std::string message, int inputPageCount = 0)
+PdfPageSequenceEditor::Result makeError(PdfPageSequenceEditor::Error error, std::string message, int inputPageCount = 0)
 {
-    return ScholiaPdfPages::Result { error, std::move(message), inputPageCount, 0 };
+    return PdfPageSequenceEditor::Result { error, std::move(message), inputPageCount, 0 };
 }
 
 void ensureGlobalParams()
@@ -234,13 +234,13 @@ struct PageSequenceEdit
     std::vector<int> pageOrder;
 };
 
-ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
+PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
 {
     if (inputFileName.empty() || outputFileName.empty()) {
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Input and output file names must not be empty.");
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Input and output file names must not be empty.");
     }
     if (inputFileName == outputFileName) {
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Input and output files must be different.");
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Input and output files must be different.");
     }
 
     ensureGlobalParams();
@@ -248,17 +248,17 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     auto doc = std::make_unique<PDFDoc>(std::make_unique<GooString>(inputFileName));
     if (!doc->isOk() || !doc->getXRef()->getCatalog().isDict()) {
         error(errSyntaxError, -1, "Could not edit damaged file ('{0:s}').", inputFileName.c_str());
-        return makeError(ScholiaPdfPages::Error::DamagedInput, "Could not edit damaged input PDF.");
+        return makeError(PdfPageSequenceEditor::Error::DamagedInput, "Could not edit damaged input PDF.");
     }
     if (doc->isEncrypted()) {
         error(errUnimplemented, -1, "Could not edit encrypted file ('{0:s}').", inputFileName.c_str());
-        return makeError(ScholiaPdfPages::Error::EncryptedInput, "Could not edit encrypted input PDF.");
+        return makeError(PdfPageSequenceEditor::Error::EncryptedInput, "Could not edit encrypted input PDF.");
     }
 
     const int pageCount = doc->getNumPages();
     if (pageCount < 1) {
         error(errSyntaxError, -1, "The input PDF has no pages.");
-        return makeError(ScholiaPdfPages::Error::DamagedInput, "The input PDF has no pages.");
+        return makeError(PdfPageSequenceEditor::Error::DamagedInput, "The input PDF has no pages.");
     }
 
     const bool wantsInsert = edit.insertBlankAfter >= 0;
@@ -268,42 +268,42 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     const bool wantsReorder = !edit.pageOrder.empty();
     if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) + static_cast<int>(wantsReorder) != 1) {
         error(errCommandLine, -1, "Exactly one page edit operation must be specified.");
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
     }
     if (edit.insertBlankAfter >= 0 && (edit.insertBlankAfter > pageCount)) {
         error(errCommandLine, -1, "The insertion point must be between 0 and {0:d}.", pageCount);
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The insertion point is outside the document page range.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The insertion point is outside the document page range.", pageCount);
     }
     if (edit.insertBlankAfter >= 0 && (edit.blankWidth < 0 || edit.blankHeight < 0 || (edit.blankWidth == 0 && edit.blankHeight > 0) || (edit.blankWidth > 0 && edit.blankHeight == 0))) {
         error(errCommandLine, -1, "Both blank page width and height must be specified, or neither.");
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "Both blank page width and height must be specified, or neither.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Both blank page width and height must be specified, or neither.", pageCount);
     }
     if (edit.insertPdfPageAfter >= 0 && (edit.insertPdfPageAfter > pageCount || edit.insertPdfFileName.empty() || edit.insertPdfPage < 1)) {
         error(errCommandLine, -1, "The imported page insertion arguments are invalid.");
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The imported page insertion arguments are invalid.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The imported page insertion arguments are invalid.", pageCount);
     }
     if (edit.deletePage >= 0 && (edit.deletePage < 1 || edit.deletePage > pageCount)) {
         error(errCommandLine, -1, "The page to delete must be between 1 and {0:d}.", pageCount);
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page to delete is outside the document page range.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page to delete is outside the document page range.", pageCount);
     }
     if (edit.deletePage >= 0 && pageCount == 1) {
         error(errCommandLine, -1, "The only page in the document cannot be deleted.");
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The only page in the document cannot be deleted.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The only page in the document cannot be deleted.", pageCount);
     }
     if (wantsMove && (edit.movePageFrom < 1 || edit.movePageFrom > pageCount || edit.movePageTo < 1 || edit.movePageTo > pageCount)) {
         error(errCommandLine, -1, "The page move source and destination must be between 1 and {0:d}.", pageCount);
-        return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
     }
     if (wantsReorder) {
         if (static_cast<int>(edit.pageOrder.size()) != pageCount) {
             error(errCommandLine, -1, "The page order must contain exactly {0:d} pages.", pageCount);
-            return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page order length does not match the document page count.", pageCount);
+            return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page order length does not match the document page count.", pageCount);
         }
         std::vector<bool> seen(pageCount + 1, false);
         for (int pageNo : edit.pageOrder) {
             if (pageNo < 1 || pageNo > pageCount || seen[pageNo]) {
                 error(errCommandLine, -1, "The page order must be a permutation of 1 through {0:d}.", pageCount);
-                return makeError(ScholiaPdfPages::Error::InvalidArguments, "The page order is not a valid page permutation.", pageCount);
+                return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page order is not a valid page permutation.", pageCount);
             }
             seen[pageNo] = true;
         }
@@ -315,23 +315,23 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
         insertedDoc = std::make_unique<PDFDoc>(std::make_unique<GooString>(edit.insertPdfFileName));
         if (!insertedDoc->isOk() || !insertedDoc->getXRef()->getCatalog().isDict()) {
             error(errSyntaxError, -1, "Could not edit damaged imported file ('{0:s}').", edit.insertPdfFileName.c_str());
-            return makeError(ScholiaPdfPages::Error::DamagedInput, "Could not read imported PDF page.", pageCount);
+            return makeError(PdfPageSequenceEditor::Error::DamagedInput, "Could not read imported PDF page.", pageCount);
         }
         if (insertedDoc->isEncrypted()) {
             error(errUnimplemented, -1, "Could not edit encrypted imported file ('{0:s}').", edit.insertPdfFileName.c_str());
-            return makeError(ScholiaPdfPages::Error::EncryptedInput, "Could not import a page from an encrypted PDF.", pageCount);
+            return makeError(PdfPageSequenceEditor::Error::EncryptedInput, "Could not import a page from an encrypted PDF.", pageCount);
         }
         insertedDocPageCount = insertedDoc->getNumPages();
         if (edit.insertPdfPage > insertedDocPageCount) {
             error(errCommandLine, -1, "The imported page number must be between 1 and {0:d}.", insertedDocPageCount);
-            return makeError(ScholiaPdfPages::Error::InvalidArguments, "The imported page is outside the source PDF page range.", pageCount);
+            return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The imported page is outside the source PDF page range.", pageCount);
         }
     }
 
     FILE *file = std::fopen(outputFileName.c_str(), "wb");
     if (!file) {
         error(errIO, -1, "Could not open file '{0:s}'.", outputFileName.c_str());
-        return makeError(ScholiaPdfPages::Error::IoError, "Could not open output file.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::IoError, "Could not open output file.", pageCount);
     }
 
     auto *outStr = new FileOutStream(file, 0);
@@ -478,15 +478,15 @@ ScholiaPdfPages::Result writePageSequence(const std::string &inputFileName, cons
     delete countRef;
 
     if (!ok) {
-        return makeError(ScholiaPdfPages::Error::WriteError, "Failed while writing the edited page sequence.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::WriteError, "Failed while writing the edited page sequence.", pageCount);
     }
 
-    return ScholiaPdfPages::Result { ScholiaPdfPages::Error::None, std::string(), pageCount, static_cast<int>(pages.size()) };
+    return PdfPageSequenceEditor::Result { PdfPageSequenceEditor::Error::None, std::string(), pageCount, static_cast<int>(pages.size()) };
 }
 
 }
 
-namespace ScholiaPdfPages
+namespace PdfPageSequenceEditor
 {
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)

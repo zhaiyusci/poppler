@@ -1,18 +1,18 @@
 //========================================================================
 //
-// ScholiaPdfPages.h
+// PdfPageSequenceEditor.h
 //
 // This file is licensed under the GPLv2 or later
 //
 //========================================================================
 
-#ifndef SCHOLIA_PDFPAGES_H
-#define SCHOLIA_PDFPAGES_H
+#ifndef PDF_PAGE_SEQUENCE_EDITOR_H
+#define PDF_PAGE_SEQUENCE_EDITOR_H
 
 #include <string>
 #include <vector>
 
-namespace ScholiaPdfPages
+namespace PdfPageSequenceEditor
 {
 
 enum class Error

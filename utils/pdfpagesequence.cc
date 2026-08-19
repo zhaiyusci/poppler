@@ -1,6 +1,6 @@
 //========================================================================
 //
-// scholia-pdfpages.cc
+// pdfpagesequence.cc
 //
 // This file is licensed under the GPLv2 or later
 //
@@ -11,7 +11,7 @@
 
 #include <cstdio>
 
-#include "ScholiaPdfPages.h"
+#include "PdfPageSequenceEditor.h"
 #include "parseargs.h"
 
 static int insertBlankAfter = -1;
@@ -53,11 +53,11 @@ int main(int argc, char *argv[])
     const bool wantsMove = movePageFrom >= 0 || movePageTo >= 0;
     if (!parseOK || argc != 3 || printVersion || printHelp || static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdf) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) != 1
         || (wantsMove && (movePageFrom < 0 || movePageTo < 0)) || (wantsInsertPdf && (insertPdfAfter < 0 || insertPdfFile[0] == '\0' || insertPdfPage < 1))) {
-        fprintf(stderr, "scholia-pdfpages version %s\n", PACKAGE_VERSION);
+        fprintf(stderr, "pdfpagesequence version %s\n", PACKAGE_VERSION);
         fprintf(stderr, "%s\n", popplerCopyright);
         fprintf(stderr, "%s\n", xpdfCopyright);
         if (!printVersion) {
-            printUsage("scholia-pdfpages", "(-insert-blank-after <page> [-blank-width <points> -blank-height <points>] | -insert-pdf-page-after <page> -insert-pdf-file <PDF> -insert-pdf-page <page> | -delete-page <page> | -move-page-from <page> -move-page-to <page>) <PDF-sourcefile> <PDF-destfile>", argDesc);
+            printUsage("pdfpagesequence", "(-insert-blank-after <page> [-blank-width <points> -blank-height <points>] | -insert-pdf-page-after <page> -insert-pdf-file <PDF> -insert-pdf-page <page> | -delete-page <page> | -move-page-from <page> -move-page-to <page>) <PDF-sourcefile> <PDF-destfile>", argDesc);
         }
         if (printVersion || printHelp) {
             return 0;
@@ -65,18 +65,18 @@ int main(int argc, char *argv[])
         return kOtherError;
     }
 
-    ScholiaPdfPages::Result result;
+    PdfPageSequenceEditor::Result result;
     if (wantsInsert) {
-        result = insertBlankWidth > 0 || insertBlankHeight > 0 ? ScholiaPdfPages::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter, insertBlankWidth, insertBlankHeight) : ScholiaPdfPages::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter);
+        result = insertBlankWidth > 0 || insertBlankHeight > 0 ? PdfPageSequenceEditor::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter, insertBlankWidth, insertBlankHeight) : PdfPageSequenceEditor::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter);
     } else if (wantsInsertPdf) {
-        result = ScholiaPdfPages::insertPdfPageAfter(argv[1], argv[2], insertPdfAfter, insertPdfFile, insertPdfPage);
+        result = PdfPageSequenceEditor::insertPdfPageAfter(argv[1], argv[2], insertPdfAfter, insertPdfFile, insertPdfPage);
     } else if (wantsDelete) {
-        result = ScholiaPdfPages::deletePage(argv[1], argv[2], deletePage);
+        result = PdfPageSequenceEditor::deletePage(argv[1], argv[2], deletePage);
     } else {
-        result = ScholiaPdfPages::movePage(argv[1], argv[2], movePageFrom, movePageTo);
+        result = PdfPageSequenceEditor::movePage(argv[1], argv[2], movePageFrom, movePageTo);
     }
     if (!result.ok()) {
-        fprintf(stderr, "scholia-pdfpages: %s\n", result.message.c_str());
+        fprintf(stderr, "pdfpagesequence: %s\n", result.message.c_str());
         return kOtherError;
     }
     return 0;
