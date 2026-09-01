@@ -42,6 +42,7 @@ Result insertPdfPageAfter(const std::string &inputFileName, const std::string &o
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);
+Result rotatePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, int rotationDegrees);
 
 }
 

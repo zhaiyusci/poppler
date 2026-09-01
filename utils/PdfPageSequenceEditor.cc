@@ -232,6 +232,8 @@ struct PageSequenceEdit
     int movePageFrom = -1;
     int movePageTo = -1;
     std::vector<int> pageOrder;
+    int rotatePage = -1;
+    int rotationDegrees = -1;
 };
 
 PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName, const std::string &outputFileName, PageSequenceEdit edit)
@@ -266,7 +268,8 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
     const bool wantsDelete = edit.deletePage >= 0;
     const bool wantsMove = edit.movePageFrom >= 0 || edit.movePageTo >= 0;
     const bool wantsReorder = !edit.pageOrder.empty();
-    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) + static_cast<int>(wantsReorder) != 1) {
+    const bool wantsRotate = edit.rotatePage >= 0;
+    if (static_cast<int>(wantsInsert) + static_cast<int>(wantsInsertPdfPage) + static_cast<int>(wantsDelete) + static_cast<int>(wantsMove) + static_cast<int>(wantsReorder) + static_cast<int>(wantsRotate) != 1) {
         error(errCommandLine, -1, "Exactly one page edit operation must be specified.");
         return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Exactly one page edit operation must be specified.", pageCount);
     }
@@ -293,6 +296,14 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
     if (wantsMove && (edit.movePageFrom < 1 || edit.movePageFrom > pageCount || edit.movePageTo < 1 || edit.movePageTo > pageCount)) {
         error(errCommandLine, -1, "The page move source and destination must be between 1 and {0:d}.", pageCount);
         return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page move source or destination is outside the document page range.", pageCount);
+    }
+    if (wantsRotate && (edit.rotatePage < 1 || edit.rotatePage > pageCount)) {
+        error(errCommandLine, -1, "The page to rotate must be between 1 and {0:d}.", pageCount);
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page to rotate is outside the document page range.", pageCount);
+    }
+    if (wantsRotate && (edit.rotationDegrees < 0 || edit.rotationDegrees >= 360 || edit.rotationDegrees % 90 != 0)) {
+        error(errCommandLine, -1, "The page rotation must be 0, 90, 180, or 270 degrees.");
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "The page rotation is invalid.", pageCount);
     }
     if (wantsReorder) {
         if (static_cast<int>(edit.pageOrder.size()) != pageCount) {
@@ -383,6 +394,9 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
         }
         if (pageNo != edit.deletePage) {
             ok = appendExistingPage(doc.get(), pageNo, yRef, countRef, &pages);
+        }
+        if (ok && pageNo == edit.rotatePage) {
+            pages.back().page.getDict()->set("Rotate", Object(edit.rotationDegrees));
         }
         if (ok && pageNo == edit.insertBlankAfter) {
             ok = edit.blankWidth > 0 ? appendBlankPageWithSize(edit.blankWidth, edit.blankHeight, yRef, &pages) : appendBlankPageLike(doc.get(), pageNo, yRef, &pages);
@@ -533,6 +547,14 @@ Result reorderPages(const std::string &inputFileName, const std::string &outputF
 {
     PageSequenceEdit edit;
     edit.pageOrder = pageOrder;
+    return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result rotatePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, int rotationDegrees)
+{
+    PageSequenceEdit edit;
+    edit.rotatePage = pageNumber;
+    edit.rotationDegrees = rotationDegrees;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
