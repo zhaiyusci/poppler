@@ -20,6 +20,7 @@ static double insertBlankHeight = 0;
 static int insertPdfAfter = -1;
 static char insertPdfFile[4096] = "";
 static int insertPdfPage = -1;
+static bool resolveDestinationConflicts = false;
 static int deletePage = -1;
 static int movePageFrom = -1;
 static int movePageTo = -1;
@@ -32,6 +33,7 @@ static const ArgDesc argDesc[] = { { "-insert-blank-after", argInt, &insertBlank
                                    { "-insert-pdf-page-after", argInt, &insertPdfAfter, 0, "insert one page from another PDF after the given 1-based page number; use 0 to insert before page 1" },
                                    { "-insert-pdf-file", argString, insertPdfFile, sizeof(insertPdfFile), "PDF file to import a page from" },
                                    { "-insert-pdf-page", argInt, &insertPdfPage, 0, "1-based page number to import from -insert-pdf-file" },
+                                   { "-resolve-destination-conflicts", argFlag, &resolveDestinationConflicts, 0, "add a suffix to copied named destinations and update matching links" },
                                    { "-delete-page", argInt, &deletePage, 0, "delete the given 1-based page number" },
                                    { "-move-page-from", argInt, &movePageFrom, 0, "move the given 1-based page number" },
                                    { "-move-page-to", argInt, &movePageTo, 0, "final 1-based destination position for -move-page-from" },
@@ -69,7 +71,8 @@ int main(int argc, char *argv[])
     if (wantsInsert) {
         result = insertBlankWidth > 0 || insertBlankHeight > 0 ? PdfPageSequenceEditor::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter, insertBlankWidth, insertBlankHeight) : PdfPageSequenceEditor::insertBlankPageAfter(argv[1], argv[2], insertBlankAfter);
     } else if (wantsInsertPdf) {
-        result = PdfPageSequenceEditor::insertPdfPageAfter(argv[1], argv[2], insertPdfAfter, insertPdfFile, insertPdfPage);
+        const auto conflictPolicy = resolveDestinationConflicts ? PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes : PdfPageSequenceEditor::NamedDestinationConflictPolicy::KeepNames;
+        result = PdfPageSequenceEditor::insertPdfPageAfter(argv[1], argv[2], insertPdfAfter, insertPdfFile, insertPdfPage, conflictPolicy);
     } else if (wantsDelete) {
         result = PdfPageSequenceEditor::deletePage(argv[1], argv[2], deletePage);
     } else {

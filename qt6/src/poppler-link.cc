@@ -233,13 +233,17 @@ LinkDestination::LinkDestination(const LinkDestinationData &data) : d(new LinkDe
     bool deleteDest = false;
     const LinkDest *ld = data.ld;
 
+    // Keep the PDF-level destination name even when Poppler can resolve it to
+    // a page immediately.  Consumers need both pieces of information: the
+    // resolved viewport for navigation and the original name for inspection
+    // and for rewriting named links when pages are copied or combined.
+    if (data.namedDest) {
+        d->name = QString::fromLatin1(data.namedDest->c_str());
+    }
+
     if (data.namedDest && !ld && !data.externalDest) {
         deleteDest = true;
         ld = data.doc->doc->findDest(data.namedDest).release();
-    }
-    // in case this destination was named one, and it was not resolved
-    if (data.namedDest && !ld) {
-        d->name = QString::fromLatin1(data.namedDest->c_str());
     }
 
     if (!ld) {

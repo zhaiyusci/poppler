@@ -26,6 +26,12 @@ enum class Error
     WriteError,
 };
 
+enum class NamedDestinationConflictPolicy
+{
+    KeepNames,
+    AddSuffixes,
+};
+
 struct Result
 {
     Error error = Error::None;
@@ -38,7 +44,16 @@ struct Result
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, double width, double height);
-Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert);
+Result insertPdfPageAfter(const std::string &inputFileName,
+                          const std::string &outputFileName,
+                          int pageNumber,
+                          const std::string &insertedFileName,
+                          int pageToInsert,
+                          NamedDestinationConflictPolicy conflictPolicy = NamedDestinationConflictPolicy::KeepNames);
+Result combinePdfFiles(const std::vector<std::string> &inputFileNames,
+                       const std::string &outputFileName,
+                       NamedDestinationConflictPolicy conflictPolicy = NamedDestinationConflictPolicy::KeepNames);
+int pageCount(const std::string &inputFileName, std::string *errorMessage = nullptr);
 Result deletePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);

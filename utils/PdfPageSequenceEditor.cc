@@ -16,7 +16,12 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <iterator>
+#include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -24,8 +29,10 @@
 #include <PDFDoc.h>
 
 #include "Array.h"
+#include "Catalog.h"
 #include "Dict.h"
 #include "Error.h"
+#include "Link.h"
 #include "Object.h"
 #include "Page.h"
 
@@ -36,7 +43,356 @@ struct PageEntry
 {
     Object page;
     unsigned int numOffset = 0;
+    Ref sourcePageRef { .num = -1, .gen = 0 };
 };
+
+bool markPageReference(PDFDoc *doc, const Ref &pageRef, XRef *outputXRef, unsigned int numOffset)
+{
+    const int outputNum = pageRef.num + static_cast<int>(numOffset);
+    if (outputNum < outputXRef->getNumObjects() && outputXRef->getEntry(outputNum)->type != xrefEntryFree) {
+        return true;
+    }
+
+    const XRefEntry *sourceEntry = doc->getXRef()->getEntry(pageRef.num);
+    if (!sourceEntry || sourceEntry->type == xrefEntryFree || !outputXRef->add(outputNum, pageRef.gen, 0, true)) {
+        return false;
+    }
+    if (sourceEntry->type == xrefEntryCompressed) {
+        outputXRef->getEntry(outputNum)->type = xrefEntryCompressed;
+    }
+    return true;
+}
+
+void addDestinationCoordinate(Array *array, bool shouldChange, double value)
+{
+    array->add(shouldChange ? Object(value) : Object::null());
+}
+
+Object makeExplicitDestination(XRef *xref, const LinkDest &destination, const Ref &pageRef)
+{
+    auto *array = new Array(xref);
+    array->add(Object(pageRef));
+    switch (destination.getKind()) {
+    case destXYZ:
+        array->add(Object(objName, "XYZ"));
+        addDestinationCoordinate(array, destination.getChangeLeft(), destination.getLeft());
+        addDestinationCoordinate(array, destination.getChangeTop(), destination.getTop());
+        addDestinationCoordinate(array, destination.getChangeZoom(), destination.getZoom());
+        break;
+    case destFit:
+        array->add(Object(objName, "Fit"));
+        break;
+    case destFitH:
+        array->add(Object(objName, "FitH"));
+        addDestinationCoordinate(array, destination.getChangeTop(), destination.getTop());
+        break;
+    case destFitV:
+        array->add(Object(objName, "FitV"));
+        addDestinationCoordinate(array, destination.getChangeLeft(), destination.getLeft());
+        break;
+    case destFitR:
+        array->add(Object(objName, "FitR"));
+        array->add(Object(destination.getLeft()));
+        array->add(Object(destination.getBottom()));
+        array->add(Object(destination.getRight()));
+        array->add(Object(destination.getTop()));
+        break;
+    case destFitB:
+        array->add(Object(objName, "FitB"));
+        break;
+    case destFitBH:
+        array->add(Object(objName, "FitBH"));
+        addDestinationCoordinate(array, destination.getChangeTop(), destination.getTop());
+        break;
+    case destFitBV:
+        array->add(Object(objName, "FitBV"));
+        addDestinationCoordinate(array, destination.getChangeLeft(), destination.getLeft());
+        break;
+    }
+    return Object(array);
+}
+
+using DestinationNameMap = std::map<std::string, std::string>;
+
+struct NamedDestinationEntry
+{
+    std::string name;
+    Object destination;
+};
+
+std::optional<Ref> destinationPageRef(PDFDoc *doc, const LinkDest &destination)
+{
+    if (destination.isPageRef()) {
+        return destination.getPageRef();
+    }
+
+    Ref *pageRef = doc->getCatalog()->getPageRef(destination.getPageNum());
+    if (!pageRef) {
+        return std::nullopt;
+    }
+    return *pageRef;
+}
+
+bool destinationPointsToPage(const LinkDest &destination, int pageNo, const Ref &pageRef)
+{
+    return destination.isPageRef() ? destination.getPageRef() == pageRef : destination.getPageNum() == pageNo;
+}
+
+std::string commonDestinationSuffix(const std::vector<std::string> &sourceNames, const std::set<std::string> &usedNames, int preferredSuffix)
+{
+    for (int suffix = std::max(1, preferredSuffix);; ++suffix) {
+        const std::string suffixText = "~" + std::to_string(suffix);
+        const bool hasConflict = std::ranges::any_of(sourceNames, [&](const std::string &sourceName) {
+            return usedNames.contains(sourceName + suffixText);
+        });
+        if (!hasConflict) {
+            return suffixText;
+        }
+    }
+}
+
+void addCatalogDestinationNames(Catalog *catalog, std::set<std::string> *names)
+{
+    for (int i = 0; i < catalog->numDests(); ++i) {
+        const char *name = catalog->getDestsName(i);
+        if (name) {
+            names->insert(name);
+        }
+    }
+    for (int i = 0; i < catalog->numDestNameTree(); ++i) {
+        const GooString *name = catalog->getDestNameTreeName(i);
+        if (name) {
+            names->insert(name->toStr());
+        }
+    }
+}
+
+std::vector<NamedDestinationEntry> materializeNameTreeDestinations(PDFDoc *doc)
+{
+    std::vector<NamedDestinationEntry> entries;
+    Catalog *catalog = doc->getCatalog();
+    entries.reserve(catalog->numDestNameTree());
+    for (int i = 0; i < catalog->numDestNameTree(); ++i) {
+        const GooString *name = catalog->getDestNameTreeName(i);
+        std::unique_ptr<LinkDest> destination = catalog->getDestNameTreeDest(i);
+        if (!name || !destination || !destination->isOk()) {
+            continue;
+        }
+        const std::optional<Ref> pageRef = destinationPageRef(doc, *destination);
+        if (!pageRef) {
+            continue;
+        }
+        entries.push_back(NamedDestinationEntry { name->toStr(), makeExplicitDestination(doc->getXRef(), *destination, *pageRef) });
+    }
+    return entries;
+}
+
+void installDestinationNameTree(PDFDoc *hostDoc, Object *names, std::vector<NamedDestinationEntry> entries)
+{
+    std::ranges::sort(entries, {}, &NamedDestinationEntry::name);
+
+    if (!names->isDict()) {
+        *names = Object(new Dict(hostDoc->getXRef()));
+    }
+    auto *destinationTree = new Dict(hostDoc->getXRef());
+    auto *destinationArray = new Array(hostDoc->getXRef());
+    for (NamedDestinationEntry &entry : entries) {
+        destinationArray->add(Object(std::string(entry.name)));
+        destinationArray->add(std::move(entry.destination));
+    }
+    destinationTree->add("Names", Object(destinationArray));
+    names->getDict()->set("Dests", Object(destinationTree));
+}
+
+DestinationNameMap cloneNamedDestinations(PDFDoc *hostDoc,
+                                          PDFDoc *sourceDoc,
+                                          int sourcePageNo,
+                                          const Ref &sourcePageRef,
+                                          const Ref &outputPageRef,
+                                          PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy,
+                                          Object *names,
+                                          Object *legacyDests)
+{
+    std::set<std::string> usedNames;
+    addCatalogDestinationNames(hostDoc->getCatalog(), &usedNames);
+
+    DestinationNameMap clones;
+    std::vector<std::pair<std::string, std::unique_ptr<LinkDest>>> sourceDestinations;
+    std::vector<NamedDestinationEntry> clonedEntries;
+    std::set<std::string> visitedSourceNames;
+    auto considerDestination = [&](const std::string &sourceName, std::unique_ptr<LinkDest> destination) {
+        if (!visitedSourceNames.insert(sourceName).second || !destination || !destination->isOk() || !destinationPointsToPage(*destination, sourcePageNo, sourcePageRef)) {
+            return;
+        }
+        sourceDestinations.emplace_back(sourceName, std::move(destination));
+    };
+
+    Catalog *sourceCatalog = sourceDoc->getCatalog();
+    for (int i = 0; i < sourceCatalog->numDests(); ++i) {
+        const char *sourceName = sourceCatalog->getDestsName(i);
+        if (sourceName) {
+            considerDestination(sourceName, sourceCatalog->getDestsDest(i));
+        }
+    }
+    for (int i = 0; i < sourceCatalog->numDestNameTree(); ++i) {
+        const GooString *sourceName = sourceCatalog->getDestNameTreeName(i);
+        if (sourceName) {
+            considerDestination(sourceName->toStr(), sourceCatalog->getDestNameTreeDest(i));
+        }
+    }
+
+    std::vector<std::string> sourceNames;
+    sourceNames.reserve(sourceDestinations.size());
+    for (const auto &[sourceName, destination] : sourceDestinations) {
+        sourceNames.push_back(sourceName);
+    }
+    const std::string suffix = conflictPolicy == PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes ? commonDestinationSuffix(sourceNames, usedNames, 2) : std::string();
+    for (auto &[sourceName, destination] : sourceDestinations) {
+        const std::string cloneName = sourceName + suffix;
+        clones.emplace(sourceName, cloneName);
+        if (usedNames.contains(cloneName)) {
+            continue;
+        }
+        usedNames.insert(cloneName);
+        Object cloneDestination = makeExplicitDestination(hostDoc->getXRef(), *destination, outputPageRef);
+        // Poppler checks the legacy /Dests dictionary before the name tree and
+        // does not fall back if both structures exist. Mirror the clone there
+        // when the host uses it so either representation resolves identically.
+        if (legacyDests->isDict()) {
+            legacyDests->getDict()->set(cloneName, cloneDestination.copy());
+        }
+        clonedEntries.push_back(NamedDestinationEntry { cloneName, std::move(cloneDestination) });
+    }
+
+    if (!clonedEntries.empty()) {
+        std::vector<NamedDestinationEntry> outputEntries = materializeNameTreeDestinations(hostDoc);
+        outputEntries.insert(outputEntries.end(), std::make_move_iterator(clonedEntries.begin()), std::make_move_iterator(clonedEntries.end()));
+        installDestinationNameTree(hostDoc, names, std::move(outputEntries));
+    }
+    return clones;
+}
+
+DestinationNameMap cloneNamedDestinationsForPages(PDFDoc *hostDoc,
+                                                  PDFDoc *sourceDoc,
+                                                  const std::map<Ref, Ref> &pageRefs,
+                                                  PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy,
+                                                  int preferredSuffix,
+                                                  std::set<std::string> *usedNames,
+                                                  std::vector<NamedDestinationEntry> *outputEntries,
+                                                  Object *legacyDests)
+{
+    DestinationNameMap clones;
+    std::vector<std::pair<std::string, std::pair<std::unique_ptr<LinkDest>, Ref>>> sourceDestinations;
+    std::set<std::string> visitedSourceNames;
+    auto considerDestination = [&](const std::string &sourceName, std::unique_ptr<LinkDest> destination) {
+        if (!visitedSourceNames.insert(sourceName).second || !destination || !destination->isOk()) {
+            return;
+        }
+        const std::optional<Ref> sourcePageRef = destinationPageRef(sourceDoc, *destination);
+        if (!sourcePageRef) {
+            return;
+        }
+        const auto outputPageRef = pageRefs.find(*sourcePageRef);
+        if (outputPageRef == pageRefs.end()) {
+            return;
+        }
+        sourceDestinations.emplace_back(sourceName, std::make_pair(std::move(destination), outputPageRef->second));
+    };
+
+    Catalog *sourceCatalog = sourceDoc->getCatalog();
+    for (int i = 0; i < sourceCatalog->numDests(); ++i) {
+        const char *sourceName = sourceCatalog->getDestsName(i);
+        if (sourceName) {
+            considerDestination(sourceName, sourceCatalog->getDestsDest(i));
+        }
+    }
+    for (int i = 0; i < sourceCatalog->numDestNameTree(); ++i) {
+        const GooString *sourceName = sourceCatalog->getDestNameTreeName(i);
+        if (sourceName) {
+            considerDestination(sourceName->toStr(), sourceCatalog->getDestNameTreeDest(i));
+        }
+    }
+
+    std::vector<std::string> sourceNames;
+    sourceNames.reserve(sourceDestinations.size());
+    for (const auto &[sourceName, destinationAndPage] : sourceDestinations) {
+        sourceNames.push_back(sourceName);
+    }
+    const std::string suffix = conflictPolicy == PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes ? commonDestinationSuffix(sourceNames, *usedNames, preferredSuffix) : std::string();
+    for (auto &[sourceName, destinationAndPage] : sourceDestinations) {
+        const std::string cloneName = sourceName + suffix;
+        clones.emplace(sourceName, cloneName);
+        if (usedNames->contains(cloneName)) {
+            continue;
+        }
+        usedNames->insert(cloneName);
+        Object cloneDestination = makeExplicitDestination(hostDoc->getXRef(), *destinationAndPage.first, destinationAndPage.second);
+        if (legacyDests->isDict()) {
+            legacyDests->getDict()->set(cloneName, cloneDestination.copy());
+        }
+        outputEntries->push_back(NamedDestinationEntry { cloneName, std::move(cloneDestination) });
+    }
+    return clones;
+}
+
+enum class CopiedDestinationDisposition { Absent, Keep, Rewritten };
+
+CopiedDestinationDisposition rewriteCopiedDestination(Dict *container,
+                                                       const char *key,
+                                                       const DestinationNameMap &clones)
+{
+    Object destination = container->lookup(key);
+    if (destination.isNull()) {
+        return CopiedDestinationDisposition::Absent;
+    }
+
+    std::string sourceName;
+    if (destination.isName()) {
+        sourceName = destination.getName();
+    } else if (destination.isString()) {
+        sourceName = destination.getString()->toStr();
+    } else if (destination.isArray()) {
+        return CopiedDestinationDisposition::Keep;
+    } else {
+        return CopiedDestinationDisposition::Keep;
+    }
+
+    const auto clone = clones.find(sourceName);
+    if (clone == clones.end()) {
+        return CopiedDestinationDisposition::Keep;
+    }
+    container->set(key, Object(std::string(clone->second)));
+    return CopiedDestinationDisposition::Rewritten;
+}
+
+void rewriteClonedNamedLinks(PDFDoc *doc,
+                             Dict *annotation,
+                             const DestinationNameMap &clones)
+{
+    Object actionRef = annotation->lookupNF("A").copy();
+    Object action = actionRef.fetch(doc->getXRef());
+    if (action.isDict()) {
+        Object kind = action.getDict()->lookup("S");
+        if (!kind.isName("GoTo")) {
+            return;
+        }
+        const CopiedDestinationDisposition disposition = rewriteCopiedDestination(action.getDict(), "D", clones);
+        if (disposition == CopiedDestinationDisposition::Absent) {
+            return;
+        }
+        if (disposition != CopiedDestinationDisposition::Rewritten) {
+            return;
+        }
+        if (actionRef.isRef()) {
+            doc->getXRef()->setModifiedObject(&action, actionRef.getRef());
+        } else {
+            annotation->set("A", std::move(action));
+        }
+        return;
+    }
+
+    rewriteCopiedDestination(annotation, "Dest", clones);
+}
 
 PdfPageSequenceEditor::Result makeError(PdfPageSequenceEditor::Error error, std::string message, int inputPageCount = 0)
 {
@@ -78,7 +434,7 @@ Object makeBlankPage(XRef *xref, const PDFRectangle *mediaBox, const PDFRectangl
     return Object(dict);
 }
 
-bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents, Object *acroForm, Object *ocProperties, Object *names)
+bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents, Object *acroForm, Object *ocProperties, Object *names, Object *dests)
 {
     Object catObj = doc->getXRef()->getCatalog();
     if (!catObj.isDict()) {
@@ -91,6 +447,7 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     *acroForm = catDict->lookupNF("AcroForm").copy();
     *ocProperties = catDict->lookupNF("OCProperties").copy();
     *names = catDict->lookup("Names");
+    *dests = catDict->lookup("Dests");
 
     Ref *firstPageRef = doc->getCatalog()->getPageRef(1);
     if (!firstPageRef) {
@@ -107,6 +464,9 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     if (!names->isNull() && names->isDict()) {
         doc->markPageObjects(names->getDict(), yRef, countRef, 0, firstPageRef->num, firstPageRef->num);
     }
+    if (!dests->isNull() && dests->isDict()) {
+        doc->markPageObjects(dests->getDict(), yRef, countRef, 0, firstPageRef->num, firstPageRef->num);
+    }
     if (intents->isArray() && intents->arrayGetLength() > 0) {
         for (int i = intents->arrayGetLength() - 1; i >= 0; --i) {
             Object intent = intents->arrayGet(i, 0);
@@ -121,7 +481,13 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     return true;
 }
 
-bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, unsigned int numOffset, std::vector<PageEntry> *pages, bool resetAnnotationUniqueNames = false)
+bool appendExistingPage(PDFDoc *doc,
+                        int pageNo,
+                        XRef *yRef,
+                        XRef *countRef,
+                        unsigned int numOffset,
+                        std::vector<PageEntry> *pages,
+                        const DestinationNameMap *clonedDestinations = nullptr)
 {
     Page *pageInfo = doc->getCatalog()->getPage(pageNo);
     if (!pageInfo) {
@@ -172,8 +538,11 @@ bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, uns
                 Object type = annotDict->lookup("Type");
                 Object subType = annotDict->lookup("Subtype");
                 if ((type.isName() && std::strcmp(type.getName(), "Annot") == 0) || !subType.isNull()) {
+                    if (clonedDestinations) {
+                        rewriteClonedNamedLinks(doc, annotDict, *clonedDestinations);
+                    }
                     annotDict->remove("P");
-                    if (resetAnnotationUniqueNames) {
+                    if (clonedDestinations) {
                         annotDict->remove("NM");
                     }
                     Object annotRef = array->getNF(i).copy();
@@ -186,7 +555,7 @@ bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, uns
         doc->markAnnotations(&annotsObj, yRef, countRef, numOffset, refPage->num, refPage->num);
     }
 
-    pages->push_back(PageEntry { std::move(page), numOffset });
+    pages->push_back(PageEntry { std::move(page), numOffset, *refPage });
     return true;
 }
 
@@ -228,6 +597,7 @@ struct PageSequenceEdit
     int insertPdfPageAfter = -1;
     std::string insertPdfFileName;
     int insertPdfPage = -1;
+    PdfPageSequenceEditor::NamedDestinationConflictPolicy destinationConflictPolicy = PdfPageSequenceEditor::NamedDestinationConflictPolicy::KeepNames;
     int deletePage = -1;
     int movePageFrom = -1;
     int movePageTo = -1;
@@ -362,6 +732,7 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
     Object acroForm;
     Object ocProperties;
     Object names;
+    Object dests;
     std::vector<PageEntry> pages;
     std::vector<int> pageOrder;
     pageOrder.reserve(pageCount);
@@ -380,7 +751,7 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
         }
     }
 
-    bool ok = markCatalogObjects(doc.get(), yRef, countRef, &intents, &acroForm, &ocProperties, &names);
+    bool ok = markCatalogObjects(doc.get(), yRef, countRef, &intents, &acroForm, &ocProperties, &names, &dests);
 
     if (ok && edit.insertBlankAfter == 0) {
         ok = edit.blankWidth > 0 ? appendBlankPageWithSize(edit.blankWidth, edit.blankHeight, yRef, &pages) : appendBlankPageLike(doc.get(), 1, yRef, &pages);
@@ -406,20 +777,67 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
         }
     }
 
+    // Internal destinations identify their target with the indirect Page object
+    // reference, not its page number. Keep the host document's Page references
+    // stable for every edit, including importing a page from another PDF. The
+    // imported page and its dependent objects use a disjoint, rebased range.
+    int rootNum = -1;
     if (ok) {
-        doc->writePageObjects(outStr, yRef, 0, true);
+        for (const PageEntry &page : pages) {
+            if (page.sourcePageRef.num >= 0 && !markPageReference(doc.get(), page.sourcePageRef, yRef, page.numOffset)) {
+                error(errSyntaxError, -1, "Could not preserve page reference {0:d}.", page.sourcePageRef.num);
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            rootNum = yRef->getNumObjects() + 1;
+            const Ref pagesRootRef { .num = rootNum + 1, .gen = 0 };
+            for (PageEntry &page : pages) {
+                if (page.sourcePageRef.num < 0) {
+                    continue;
+                }
+                page.page.getDict()->set("Parent", Object(pagesRootRef));
+                doc->getXRef()->setModifiedObject(&page.page, page.sourcePageRef);
+            }
+            doc->writePageObjects(outStr, yRef, 0, true);
+        }
+    }
 
-        if (insertedDoc && insertPdfPageIndex >= 0) {
-            const unsigned int numOffset = yRef->getNumObjects() + 1;
-            std::vector<PageEntry> insertedPages;
-            ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages, true);
-            if (ok) {
-                insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
-                pages.insert(pages.begin() + insertPdfPageIndex, std::move(insertedPages.front()));
+    if (ok && insertedDoc && insertPdfPageIndex >= 0) {
+        // rootNum and rootNum + 1 are reserved for the new Catalog and Pages
+        // objects. Since valid indirect object numbers start at one, applying
+        // this offset places every imported object after those reservations.
+        const unsigned int numOffset = rootNum + 1;
+        Ref *sourcePageRef = insertedDoc->getCatalog()->getPageRef(edit.insertPdfPage);
+        if (!sourcePageRef) {
+            error(errSyntaxError, -1, "Could not find imported page reference for page {0:d}.", edit.insertPdfPage);
+            ok = false;
+        }
+        const Ref outputPageRef { .num = sourcePageRef ? sourcePageRef->num + static_cast<int>(numOffset) : -1, .gen = sourcePageRef ? sourcePageRef->gen : 0 };
+        const DestinationNameMap clonedDestinations = ok ? cloneNamedDestinations(doc.get(), insertedDoc.get(), edit.insertPdfPage, *sourcePageRef, outputPageRef, edit.destinationConflictPolicy, &names, &dests) : DestinationNameMap {};
+        std::vector<PageEntry> insertedPages;
+        if (ok) {
+            ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages, &clonedDestinations);
+        }
+        if (ok) {
+            insertedDoc->writePageObjects(outStr, yRef, numOffset, true);
+            pages.insert(pages.begin() + insertPdfPageIndex, std::move(insertedPages.front()));
+        }
+    }
+
+    if (ok) {
+        std::vector<Ref> outputPageRefs;
+        outputPageRefs.reserve(pages.size());
+        int nextGeneratedPageRef = rootNum + 2;
+        for (const PageEntry &page : pages) {
+            if (page.sourcePageRef.num >= 0) {
+                outputPageRefs.push_back(Ref { .num = page.sourcePageRef.num + static_cast<int>(page.numOffset), .gen = page.sourcePageRef.gen });
+            } else {
+                outputPageRefs.push_back(Ref { .num = nextGeneratedPageRef++, .gen = 0 });
             }
         }
 
-        const int rootNum = yRef->getNumObjects() + 1;
         yRef->add(rootNum, 0, outStr->getPos(), true);
         outStr->printf("%d 0 obj\n", rootNum);
         outStr->printf("<< /Type /Catalog /Pages %d 0 R", rootNum + 1);
@@ -445,19 +863,27 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
             outStr->printf(" /Names ");
             PDFDoc::writeObject(&names, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
         }
+        if (!dests.isNull() && dests.isDict()) {
+            outStr->printf(" /Dests ");
+            PDFDoc::writeObject(&dests, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+        }
         outStr->printf(">>\nendobj\n");
 
         yRef->add(rootNum + 1, 0, outStr->getPos(), true);
         outStr->printf("%d 0 obj\n", rootNum + 1);
         outStr->printf("<< /Type /Pages /Kids [");
-        for (std::size_t i = 0; i < pages.size(); ++i) {
-            outStr->printf(" %zu 0 R", rootNum + i + 2);
+        for (const Ref &pageRef : outputPageRefs) {
+            outStr->printf(" %d %d R", pageRef.num, pageRef.gen);
         }
         outStr->printf(" ] /Count %zu >>\nendobj\n", pages.size());
 
         for (std::size_t i = 0; i < pages.size(); ++i) {
-            yRef->add(rootNum + static_cast<int>(i) + 2, 0, outStr->getPos(), true);
-            outStr->printf("%zu 0 obj\n", rootNum + i + 2);
+            if (pages[i].numOffset == 0 && pages[i].sourcePageRef.num >= 0) {
+                continue;
+            }
+            const Ref pageRef = outputPageRefs[i];
+            yRef->add(pageRef.num, pageRef.gen, outStr->getPos(), true);
+            outStr->printf("%d %d obj\n", pageRef.num, pageRef.gen);
             outStr->printf("<< ");
             Dict *pageDict = pages[i].page.getDict();
             for (int keyIndex = 0; keyIndex < pageDict->getLength(); ++keyIndex) {
@@ -498,6 +924,258 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
     return PdfPageSequenceEditor::Result { PdfPageSequenceEditor::Error::None, std::string(), pageCount, static_cast<int>(pages.size()) };
 }
 
+PdfPageSequenceEditor::Result combinePdfFilesImpl(const std::vector<std::string> &inputFileNames,
+                                                  const std::string &outputFileName,
+                                                  PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy)
+{
+    if (inputFileNames.size() < 2 || outputFileName.empty()) {
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "At least two input PDFs and one output file are required.");
+    }
+    for (const std::string &inputFileName : inputFileNames) {
+        if (inputFileName.empty() || inputFileName == outputFileName) {
+            return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Input PDFs must be non-empty and different from the output file.");
+        }
+    }
+
+    ensureGlobalParams();
+
+    std::vector<std::unique_ptr<PDFDoc>> documents;
+    documents.reserve(inputFileNames.size());
+    int totalPageCount = 0;
+    int majorVersion = 1;
+    int minorVersion = 0;
+    for (const std::string &inputFileName : inputFileNames) {
+        auto document = std::make_unique<PDFDoc>(std::make_unique<GooString>(inputFileName));
+        if (!document->isOk() || !document->getXRef()->getCatalog().isDict() || document->getNumPages() < 1) {
+            error(errSyntaxError, -1, "Could not combine damaged file ('{0:s}').", inputFileName.c_str());
+            return makeError(PdfPageSequenceEditor::Error::DamagedInput, "Could not read one of the input PDFs.", totalPageCount);
+        }
+        if (document->isEncrypted()) {
+            error(errUnimplemented, -1, "Could not combine encrypted file ('{0:s}').", inputFileName.c_str());
+            return makeError(PdfPageSequenceEditor::Error::EncryptedInput, "Encrypted PDFs cannot be combined.", totalPageCount);
+        }
+        totalPageCount += document->getNumPages();
+        if (document->getPDFMajorVersion() > majorVersion || (document->getPDFMajorVersion() == majorVersion && document->getPDFMinorVersion() > minorVersion)) {
+            majorVersion = document->getPDFMajorVersion();
+            minorVersion = document->getPDFMinorVersion();
+        }
+        documents.push_back(std::move(document));
+    }
+
+    FILE *file = std::fopen(outputFileName.c_str(), "wb");
+    if (!file) {
+        error(errIO, -1, "Could not open file '{0:s}'.", outputFileName.c_str());
+        return makeError(PdfPageSequenceEditor::Error::IoError, "Could not open output file.", totalPageCount);
+    }
+
+    auto *outStr = new FileOutStream(file, 0);
+    auto *yRef = new XRef();
+    auto *countRef = new XRef();
+    yRef->add(0, 65535, 0, false);
+    PDFDoc::writeHeader(outStr, majorVersion, minorVersion);
+
+    PDFDoc *hostDoc = documents.front().get();
+    Object intents;
+    Object acroForm;
+    Object ocProperties;
+    Object names;
+    Object dests;
+    std::vector<PageEntry> pages;
+    pages.reserve(totalPageCount);
+
+    bool ok = markCatalogObjects(hostDoc, yRef, countRef, &intents, &acroForm, &ocProperties, &names, &dests);
+    std::set<std::string> usedDestinationNames;
+    std::vector<NamedDestinationEntry> outputDestinations;
+    DestinationNameMap hostDestinations;
+    if (ok && conflictPolicy == PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes) {
+        std::map<Ref, Ref> hostPageRefs;
+        for (int pageNo = 1; pageNo <= hostDoc->getNumPages(); ++pageNo) {
+            Ref *pageRef = hostDoc->getCatalog()->getPageRef(pageNo);
+            if (!pageRef) {
+                error(errSyntaxError, -1, "Could not find page reference {0:d} while preparing destination namespaces.", pageNo);
+                ok = false;
+                break;
+            }
+            hostPageRefs.emplace(*pageRef, *pageRef);
+        }
+        if (ok) {
+            Object noLegacyDests = Object::null();
+            hostDestinations = cloneNamedDestinationsForPages(hostDoc, hostDoc, hostPageRefs, conflictPolicy, 1, &usedDestinationNames, &outputDestinations, &noLegacyDests);
+            dests = std::move(noLegacyDests);
+        }
+    } else if (ok) {
+        addCatalogDestinationNames(hostDoc->getCatalog(), &usedDestinationNames);
+        outputDestinations = materializeNameTreeDestinations(hostDoc);
+    }
+    const std::size_t originalDestinationCount = outputDestinations.size();
+
+    for (int pageNo = 1; ok && pageNo <= hostDoc->getNumPages(); ++pageNo) {
+        if (conflictPolicy == PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes) {
+            ok = appendExistingPage(hostDoc, pageNo, yRef, countRef, 0, &pages, &hostDestinations);
+        } else {
+            ok = appendExistingPage(hostDoc, pageNo, yRef, countRef, &pages);
+        }
+    }
+
+    int rootNum = -1;
+    if (ok) {
+        for (const PageEntry &page : pages) {
+            if (!markPageReference(hostDoc, page.sourcePageRef, yRef, 0)) {
+                error(errSyntaxError, -1, "Could not preserve page reference {0:d} while combining PDFs.", page.sourcePageRef.num);
+                ok = false;
+                break;
+            }
+        }
+    }
+    if (ok) {
+        rootNum = yRef->getNumObjects() + 1;
+        const Ref pagesRootRef { .num = rootNum + 1, .gen = 0 };
+        for (PageEntry &page : pages) {
+            page.page.getDict()->set("Parent", Object(pagesRootRef));
+            hostDoc->getXRef()->setModifiedObject(&page.page, page.sourcePageRef);
+        }
+        hostDoc->writePageObjects(outStr, yRef, 0, true);
+    }
+
+    unsigned int numOffset = rootNum + 1;
+    for (std::size_t documentIndex = 1; ok && documentIndex < documents.size(); ++documentIndex) {
+        PDFDoc *sourceDoc = documents[documentIndex].get();
+        std::map<Ref, Ref> pageRefs;
+        for (int pageNo = 1; pageNo <= sourceDoc->getNumPages(); ++pageNo) {
+            Ref *sourcePageRef = sourceDoc->getCatalog()->getPageRef(pageNo);
+            if (!sourcePageRef) {
+                error(errSyntaxError, -1, "Could not find page reference {0:d} while combining PDFs.", pageNo);
+                ok = false;
+                break;
+            }
+            pageRefs.emplace(*sourcePageRef, Ref { .num = sourcePageRef->num + static_cast<int>(numOffset), .gen = sourcePageRef->gen });
+        }
+        if (!ok) {
+            break;
+        }
+
+        const DestinationNameMap clonedDestinations = cloneNamedDestinationsForPages(hostDoc, sourceDoc, pageRefs, conflictPolicy, static_cast<int>(documentIndex) + 1, &usedDestinationNames, &outputDestinations, &dests);
+        std::vector<PageEntry> sourcePages;
+        sourcePages.reserve(sourceDoc->getNumPages());
+        for (int pageNo = 1; ok && pageNo <= sourceDoc->getNumPages(); ++pageNo) {
+            ok = appendExistingPage(sourceDoc, pageNo, yRef, countRef, numOffset, &sourcePages, &clonedDestinations);
+        }
+        if (!ok) {
+            break;
+        }
+
+        const Ref pagesRootRef { .num = rootNum + 1, .gen = 0 };
+        for (PageEntry &page : sourcePages) {
+            page.page.getDict()->set("Parent", Object(pagesRootRef));
+            sourceDoc->getXRef()->setModifiedObject(&page.page, page.sourcePageRef);
+            if (!markPageReference(sourceDoc, page.sourcePageRef, yRef, numOffset)) {
+                error(errSyntaxError, -1, "Could not import page reference {0:d} while combining PDFs.", page.sourcePageRef.num);
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            break;
+        }
+        sourceDoc->writePageObjects(outStr, yRef, numOffset, true);
+        pages.insert(pages.end(), std::make_move_iterator(sourcePages.begin()), std::make_move_iterator(sourcePages.end()));
+        numOffset = yRef->getNumObjects();
+    }
+
+    if (ok && (conflictPolicy == PdfPageSequenceEditor::NamedDestinationConflictPolicy::AddSuffixes || outputDestinations.size() > originalDestinationCount)) {
+        installDestinationNameTree(hostDoc, &names, std::move(outputDestinations));
+    }
+
+    if (ok) {
+        std::vector<Ref> outputPageRefs;
+        outputPageRefs.reserve(pages.size());
+        for (const PageEntry &page : pages) {
+            outputPageRefs.push_back(Ref { .num = page.sourcePageRef.num + static_cast<int>(page.numOffset), .gen = page.sourcePageRef.gen });
+        }
+
+        yRef->add(rootNum, 0, outStr->getPos(), true);
+        outStr->printf("%d 0 obj\n", rootNum);
+        outStr->printf("<< /Type /Catalog /Pages %d 0 R", rootNum + 1);
+        if (intents.isArray() && intents.arrayGetLength() > 0) {
+            outStr->printf(" /OutputIntents [");
+            for (int i = 0; i < intents.arrayGetLength(); ++i) {
+                Object intent = intents.arrayGet(i, 0);
+                if (intent.isDict()) {
+                    PDFDoc::writeObject(&intent, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+                }
+            }
+            outStr->printf("]");
+        }
+        if (!acroForm.isNull()) {
+            outStr->printf(" /AcroForm ");
+            PDFDoc::writeObject(&acroForm, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+        }
+        if (!ocProperties.isNull() && ocProperties.isDict()) {
+            outStr->printf(" /OCProperties ");
+            PDFDoc::writeObject(&ocProperties, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+        }
+        if (!names.isNull() && names.isDict()) {
+            outStr->printf(" /Names ");
+            PDFDoc::writeObject(&names, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+        }
+        if (!dests.isNull() && dests.isDict()) {
+            outStr->printf(" /Dests ");
+            PDFDoc::writeObject(&dests, outStr, yRef, 0, nullptr, cryptRC4, 0, 0, 0);
+        }
+        outStr->printf(">>\nendobj\n");
+
+        yRef->add(rootNum + 1, 0, outStr->getPos(), true);
+        outStr->printf("%d 0 obj\n", rootNum + 1);
+        outStr->printf("<< /Type /Pages /Kids [");
+        for (const Ref &pageRef : outputPageRefs) {
+            outStr->printf(" %d %d R", pageRef.num, pageRef.gen);
+        }
+        outStr->printf(" ] /Count %zu >>\nendobj\n", pages.size());
+
+        for (std::size_t i = 0; i < pages.size(); ++i) {
+            if (pages[i].numOffset == 0) {
+                continue;
+            }
+            const Ref pageRef = outputPageRefs[i];
+            yRef->add(pageRef.num, pageRef.gen, outStr->getPos(), true);
+            outStr->printf("%d %d obj\n", pageRef.num, pageRef.gen);
+            outStr->printf("<< ");
+            Dict *pageDict = pages[i].page.getDict();
+            for (int keyIndex = 0; keyIndex < pageDict->getLength(); ++keyIndex) {
+                if (keyIndex > 0) {
+                    outStr->printf(" ");
+                }
+                const char *key = pageDict->getKey(keyIndex);
+                Object value = pageDict->getValNF(keyIndex).copy();
+                if (std::strcmp(key, "Parent") == 0) {
+                    outStr->printf("/Parent %d 0 R", rootNum + 1);
+                } else {
+                    outStr->printf("/%s ", key);
+                    PDFDoc::writeObject(&value, outStr, yRef, pages[i].numOffset, nullptr, cryptRC4, 0, 0, 0);
+                }
+            }
+            outStr->printf(" >>\nendobj\n");
+        }
+
+        const Goffset xrefOffset = outStr->getPos();
+        Ref rootRef { .num = rootNum, .gen = 0 };
+        const int xrefSize = yRef->getNumObjects();
+        Object trailerDict = PDFDoc::createTrailerDict(xrefSize, false, 0, &rootRef, yRef, outputFileName.c_str(), outStr->getPos());
+        PDFDoc::writeXRefTableTrailer(std::move(trailerDict), yRef, true, xrefOffset, outStr, yRef);
+    }
+
+    outStr->close();
+    delete outStr;
+    std::fclose(file);
+    delete yRef;
+    delete countRef;
+
+    if (!ok) {
+        return makeError(PdfPageSequenceEditor::Error::WriteError, "Failed while combining the input PDFs.", totalPageCount);
+    }
+    return PdfPageSequenceEditor::Result { PdfPageSequenceEditor::Error::None, std::string(), totalPageCount, static_cast<int>(pages.size()) };
+}
+
 }
 
 namespace PdfPageSequenceEditor
@@ -519,12 +1197,18 @@ Result insertBlankPageAfter(const std::string &inputFileName, const std::string 
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
-Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert)
+Result insertPdfPageAfter(const std::string &inputFileName,
+                          const std::string &outputFileName,
+                          int pageNumber,
+                          const std::string &insertedFileName,
+                          int pageToInsert,
+                          NamedDestinationConflictPolicy conflictPolicy)
 {
     PageSequenceEdit edit;
     edit.insertPdfPageAfter = pageNumber;
     edit.insertPdfFileName = insertedFileName;
     edit.insertPdfPage = pageToInsert;
+    edit.destinationConflictPolicy = conflictPolicy;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
@@ -541,6 +1225,40 @@ Result movePage(const std::string &inputFileName, const std::string &outputFileN
     edit.movePageFrom = sourcePageNumber;
     edit.movePageTo = destinationPageNumber;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result combinePdfFiles(const std::vector<std::string> &inputFileNames, const std::string &outputFileName, NamedDestinationConflictPolicy conflictPolicy)
+{
+    return combinePdfFilesImpl(inputFileNames, outputFileName, conflictPolicy);
+}
+
+int pageCount(const std::string &inputFileName, std::string *errorMessage)
+{
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    if (inputFileName.empty()) {
+        if (errorMessage) {
+            *errorMessage = "The PDF file name must not be empty.";
+        }
+        return -1;
+    }
+
+    ensureGlobalParams();
+    auto document = std::make_unique<PDFDoc>(std::make_unique<GooString>(inputFileName));
+    if (!document->isOk() || !document->getXRef()->getCatalog().isDict() || document->getNumPages() < 1) {
+        if (errorMessage) {
+            *errorMessage = "Could not read the PDF.";
+        }
+        return -1;
+    }
+    if (document->isEncrypted()) {
+        if (errorMessage) {
+            *errorMessage = "Encrypted PDFs are not supported.";
+        }
+        return -1;
+    }
+    return document->getNumPages();
 }
 
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder)

@@ -73,10 +73,10 @@ void TestLinks::checkDests_xr02()
 
     std::unique_ptr<Poppler::LinkDestination> dest = doc->linkDestination(QStringLiteral("section.1"));
     QVERIFY(isDestinationValid_pageNumber(dest.get(), doc.get()));
-    QVERIFY(!isDestinationValid_name(dest.get()));
+    QCOMPARE(dest->destinationName(), QLatin1String("section.1"));
     dest = doc->linkDestination(QStringLiteral("section.2"));
     QVERIFY(isDestinationValid_pageNumber(dest.get(), doc.get()));
-    QVERIFY(!isDestinationValid_name(dest.get()));
+    QCOMPARE(dest->destinationName(), QLatin1String("section.2"));
     dest = doc->linkDestination(QStringLiteral("section.3"));
     QVERIFY(!isDestinationValid_pageNumber(dest.get(), doc.get()));
     QVERIFY(isDestinationValid_name(dest.get()));
