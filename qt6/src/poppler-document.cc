@@ -605,6 +605,34 @@ std::unique_ptr<LinkDestination> Document::linkDestination(const QString &name)
     return ld;
 }
 
+QStringList Document::namedDestinationNames() const
+{
+    QStringList result;
+    QSet<QString> seen;
+    Catalog *catalog = m_doc->doc->getCatalog();
+
+    const auto appendName = [&result, &seen](const QString &name) {
+        if (!seen.contains(name)) {
+            seen.insert(name);
+            result.append(name);
+        }
+    };
+
+    for (int i = 0; i < catalog->numDests(); ++i) {
+        if (const char *name = catalog->getDestsName(i)) {
+            appendName(QString::fromLatin1(name));
+        }
+    }
+    for (int i = 0; i < catalog->numDestNameTree(); ++i) {
+        if (const GooString *name = catalog->getDestNameTreeName(i)) {
+            appendName(QString::fromLatin1(name->c_str(), name->size()));
+        }
+    }
+
+    result.sort(Qt::CaseSensitive);
+    return result;
+}
+
 void Document::setPaperColor(const QColor &color)
 {
     m_doc->setPaperColor(color);

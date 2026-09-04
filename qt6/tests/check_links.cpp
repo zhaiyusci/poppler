@@ -71,6 +71,13 @@ void TestLinks::checkDests_xr02()
     std::unique_ptr<Poppler::Document> doc = Poppler::Document::load(QStringLiteral(TESTDATADIR "/unittestcases/xr02.pdf"));
     QVERIFY(doc);
 
+    const QStringList destinationNames = doc->namedDestinationNames();
+    QVERIFY(destinationNames.contains(QStringLiteral("section.1")));
+    QVERIFY(destinationNames.contains(QStringLiteral("section.2")));
+    QStringList sortedDestinationNames = destinationNames;
+    sortedDestinationNames.sort(Qt::CaseSensitive);
+    QCOMPARE(destinationNames, sortedDestinationNames);
+
     std::unique_ptr<Poppler::LinkDestination> dest = doc->linkDestination(QStringLiteral("section.1"));
     QVERIFY(isDestinationValid_pageNumber(dest.get(), doc.get()));
     QCOMPARE(dest->destinationName(), QLatin1String("section.1"));

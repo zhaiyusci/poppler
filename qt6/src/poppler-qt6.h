@@ -65,6 +65,7 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QIODevice>
 #include <QtCore/QSet>
+#include <QtCore/QStringList>
 #include "poppler-export.h"
 
 class EmbFile;
@@ -1601,6 +1602,14 @@ QString subject = m_doc->info("Subject");
        actually found, or empty unique pointer otherwise
     */
     std::unique_ptr<LinkDestination> linkDestination(const QString &name);
+
+    /**
+       Returns the names of all destinations declared by the document.
+
+       Names present in both the legacy destination dictionary and the
+       destination name tree are returned only once, in sorted order.
+    */
+    QStringList namedDestinationNames() const;
 
     /**
       Sets the paper color
