@@ -58,6 +58,41 @@ Result deletePage(const std::string &inputFileName, const std::string &outputFil
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);
 Result rotatePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, int rotationDegrees);
+Result addNamedDestination(const std::string &inputFileName,
+                           const std::string &outputFileName,
+                           const std::string &name,
+                           int pageNumber,
+                           double normalizedX,
+                           double normalizedY);
+Result renameNamedDestination(const std::string &inputFileName,
+                              const std::string &outputFileName,
+                              const std::string &oldName,
+                              const std::string &newName);
+Result deleteNamedDestination(const std::string &inputFileName,
+                              const std::string &outputFileName,
+                              const std::string &name);
+Result editInternalLinkDestination(const std::string &inputFileName,
+                                   const std::string &outputFileName,
+                                   int sourcePageNumber,
+                                   double linkLeft,
+                                   double linkTop,
+                                   double linkRight,
+                                   double linkBottom,
+                                   const std::string &destinationName,
+                                   int destinationPageNumber,
+                                   double destinationX,
+                                   double destinationY);
+Result createInternalLink(const std::string &inputFileName,
+                          const std::string &outputFileName,
+                          int sourcePageNumber,
+                          double linkLeft,
+                          double linkTop,
+                          double linkRight,
+                          double linkBottom,
+                          const std::string &destinationName,
+                          int destinationPageNumber,
+                          double destinationX,
+                          double destinationY);
 
 }
 

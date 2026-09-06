@@ -1025,7 +1025,7 @@ private:
 // AnnotLink
 //------------------------------------------------------------------------
 
-class AnnotLink : public Annot
+class POPPLER_PRIVATE_EXPORT AnnotLink : public Annot
 {
 public:
     enum AnnotLinkEffect

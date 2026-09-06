@@ -17,7 +17,10 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,9 +32,11 @@
 #include <PDFDoc.h>
 
 #include "Array.h"
+#include "Annot.h"
 #include "Catalog.h"
 #include "Dict.h"
 #include "Error.h"
+#include "GfxState.h"
 #include "Link.h"
 #include "Object.h"
 #include "Page.h"
@@ -366,8 +371,8 @@ CopiedDestinationDisposition rewriteCopiedDestination(Dict *container,
 }
 
 void rewriteClonedNamedLinks(PDFDoc *doc,
-                             Dict *annotation,
-                             const DestinationNameMap &clones)
+                              Dict *annotation,
+                              const DestinationNameMap &clones)
 {
     Object actionRef = annotation->lookupNF("A").copy();
     Object action = actionRef.fetch(doc->getXRef());
@@ -394,6 +399,79 @@ void rewriteClonedNamedLinks(PDFDoc *doc,
     rewriteCopiedDestination(annotation, "Dest", clones);
 }
 
+bool rewriteNamedDestinationValue(Dict *container, const char *key, const std::string &oldName, const std::string &newName)
+{
+    const Object &destination = container->lookupNF(key);
+    if (destination.isName() && destination.getName() == oldName) {
+        container->set(key, Object(objName, newName.c_str()));
+        return true;
+    }
+    if (destination.isString() && destination.getString()->toStr() == oldName) {
+        container->set(key, Object(std::string(newName)));
+        return true;
+    }
+    return false;
+}
+
+bool rewriteDirectNamedDestinationReferences(Object *object, const std::string &oldName, const std::string &newName)
+{
+    if (object->isDict()) {
+        Dict *dict = object->getDict();
+        bool changed = rewriteNamedDestinationValue(dict, "Dest", oldName, newName);
+        const Object actionKind = dict->lookup("S");
+        if (actionKind.isName("GoTo")) {
+            changed = rewriteNamedDestinationValue(dict, "D", oldName, newName) || changed;
+        }
+        const Object type = dict->lookup("Type");
+        if (type.isName("Catalog")) {
+            changed = rewriteNamedDestinationValue(dict, "OpenAction", oldName, newName) || changed;
+        }
+
+        for (int i = 0; i < dict->getLength(); ++i) {
+            const Object &child = dict->getValNF(i);
+            if (!child.isRef()) {
+                Object childCopy = child.copy();
+                changed = rewriteDirectNamedDestinationReferences(&childCopy, oldName, newName) || changed;
+            }
+        }
+        return changed;
+    }
+    if (object->isArray()) {
+        Array *array = object->getArray();
+        bool changed = false;
+        for (int i = 0; i < array->getLength(); ++i) {
+            const Object &child = array->getNF(i);
+            if (!child.isRef()) {
+                Object childCopy = child.copy();
+                changed = rewriteDirectNamedDestinationReferences(&childCopy, oldName, newName) || changed;
+            }
+        }
+        return changed;
+    }
+    if (object->isStream()) {
+        Object streamDictionary(object->getStream()->getDict());
+        return rewriteDirectNamedDestinationReferences(&streamDictionary, oldName, newName);
+    }
+    return false;
+}
+
+void rewriteNamedDestinationReferences(PDFDoc *document, const std::string &oldName, const std::string &newName)
+{
+    XRef *xref = document->getXRef();
+    const int objectCount = xref->getNumObjects();
+    for (int objectNumber = 0; objectNumber < objectCount; ++objectNumber) {
+        const XRefEntry *entry = xref->getEntry(objectNumber);
+        if (!entry || entry->type == xrefEntryFree || entry->type == xrefEntryNone) {
+            continue;
+        }
+        const Ref reference { .num = objectNumber, .gen = entry->type == xrefEntryCompressed ? 0 : entry->gen };
+        Object object = xref->fetch(reference);
+        if (rewriteDirectNamedDestinationReferences(&object, oldName, newName)) {
+            xref->setModifiedObject(&object, reference);
+        }
+    }
+}
+
 PdfPageSequenceEditor::Result makeError(PdfPageSequenceEditor::Error error, std::string message, int inputPageCount = 0)
 {
     return PdfPageSequenceEditor::Result { error, std::move(message), inputPageCount, 0 };
@@ -404,6 +482,116 @@ void ensureGlobalParams()
     if (!globalParams) {
         globalParams = std::make_unique<GlobalParams>();
     }
+}
+
+bool normalizedPointToUserCoordinates(Page *page, double normalizedX, double normalizedY, double *userX, double *userY)
+{
+    if (!page || !userX || !userY || normalizedX < 0.0 || normalizedX > 1.0 || normalizedY < 0.0 || normalizedY > 1.0) {
+        return false;
+    }
+
+    // Match Poppler::LinkDestination's conversion so the destination lands at
+    // the same normalized crop-box point that the viewer supplied.
+    GfxState state(72.0, 72.0, page->getCropBox(), page->getRotate(), true);
+    const std::array<double, 6> &ctm = state.getCTM();
+    const double determinant = ctm[0] * ctm[3] - ctm[1] * ctm[2];
+    if (std::abs(determinant) < 1e-12) {
+        return false;
+    }
+
+    const double deviceX = normalizedX * page->getCropWidth();
+    const double deviceY = normalizedY * page->getCropHeight();
+    const double translatedX = deviceX - ctm[4];
+    const double translatedY = deviceY - ctm[5];
+    *userX = (ctm[3] * translatedX - ctm[2] * translatedY) / determinant;
+    *userY = (-ctm[1] * translatedX + ctm[0] * translatedY) / determinant;
+    return true;
+}
+
+Object makeXyzDestination(PDFDoc *doc, int pageNumber, double normalizedX, double normalizedY)
+{
+    Page *page = doc ? doc->getPage(pageNumber) : nullptr;
+    Ref *pageRef = doc ? doc->getCatalog()->getPageRef(pageNumber) : nullptr;
+    double userX = 0.0;
+    double userY = 0.0;
+    if (!page || !pageRef || !normalizedPointToUserCoordinates(page, normalizedX, normalizedY, &userX, &userY)) {
+        return Object::null();
+    }
+
+    auto *destination = new Array(doc->getXRef());
+    destination->add(Object(*pageRef));
+    destination->add(Object(objName, "XYZ"));
+    destination->add(Object(userX));
+    destination->add(Object(userY));
+    destination->add(Object::null());
+    return Object(destination);
+}
+
+struct NormalizedLinkRectangle
+{
+    double left = 0.0;
+    double top = 0.0;
+    double right = 0.0;
+    double bottom = 0.0;
+};
+
+NormalizedLinkRectangle normalizedLinkRectangle(Page *page, const PDFRectangle &rectangle)
+{
+    double pageWidth = page->getCropWidth();
+    double pageHeight = page->getCropHeight();
+    if (page->getRotate() == 90 || page->getRotate() == 270) {
+        std::swap(pageWidth, pageHeight);
+    }
+
+    GfxState state(72.0, 72.0, page->getCropBox(), page->getRotate(), true);
+    double firstX = 0.0;
+    double firstY = 0.0;
+    double secondX = 0.0;
+    double secondY = 0.0;
+    state.transform(rectangle.x1, rectangle.y1, &firstX, &firstY);
+    state.transform(rectangle.x2, rectangle.y2, &secondX, &secondY);
+
+    // LinkExtractorOutputDev rounds to device pixels before normalizing.
+    firstX = static_cast<int>(firstX + 0.5);
+    firstY = static_cast<int>(firstY + 0.5);
+    secondX = static_cast<int>(secondX + 0.5);
+    secondY = static_cast<int>(secondY + 0.5);
+    return { std::min(firstX, secondX) / pageWidth,
+             std::min(firstY, secondY) / pageHeight,
+             std::max(firstX, secondX) / pageWidth,
+             std::max(firstY, secondY) / pageHeight };
+}
+
+double linkRectangleDistance(const NormalizedLinkRectangle &first, const NormalizedLinkRectangle &second)
+{
+    return std::abs(first.left - second.left) + std::abs(first.top - second.top) + std::abs(first.right - second.right) + std::abs(first.bottom - second.bottom);
+}
+
+PdfPageSequenceEditor::Result openEditablePdf(const std::string &inputFileName, const std::string &outputFileName, std::unique_ptr<PDFDoc> *document)
+{
+    if (!document || inputFileName.empty() || outputFileName.empty() || inputFileName == outputFileName) {
+        return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "Input and output files must be non-empty and different.");
+    }
+
+    ensureGlobalParams();
+    auto doc = std::make_unique<PDFDoc>(std::make_unique<GooString>(inputFileName));
+    if (!doc->isOk()) {
+        return makeError(PdfPageSequenceEditor::Error::DamagedInput, "Could not edit damaged input PDF.");
+    }
+    if (doc->isEncrypted()) {
+        return makeError(PdfPageSequenceEditor::Error::EncryptedInput, "Could not edit encrypted input PDF.", doc->getNumPages());
+    }
+    *document = std::move(doc);
+    return {};
+}
+
+PdfPageSequenceEditor::Result saveEditedPdf(PDFDoc *document, const std::string &outputFileName)
+{
+    const int pageCount = document ? document->getNumPages() : 0;
+    if (!document || document->saveAs(outputFileName, writeForceRewrite) != errNone) {
+        return makeError(PdfPageSequenceEditor::Error::WriteError, "Could not write the edited PDF.", pageCount);
+    }
+    return { PdfPageSequenceEditor::Error::None, std::string(), pageCount, pageCount };
 }
 
 Object makeBoxArray(XRef *xref, const PDFRectangle *box)
@@ -1274,6 +1462,346 @@ Result rotatePage(const std::string &inputFileName, const std::string &outputFil
     edit.rotatePage = pageNumber;
     edit.rotationDegrees = rotationDegrees;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
+}
+
+Result addNamedDestination(const std::string &inputFileName,
+                           const std::string &outputFileName,
+                           const std::string &name,
+                           int pageNumber,
+                           double normalizedX,
+                           double normalizedY)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (name.empty() || pageNumber < 1 || pageNumber > pageCount) {
+        return makeError(Error::InvalidArguments, "The named destination name or page is invalid.", pageCount);
+    }
+
+    Object destination = makeXyzDestination(document.get(), pageNumber, normalizedX, normalizedY);
+    if (!destination.isArray()) {
+        return makeError(Error::InvalidArguments, "The named destination position is invalid.", pageCount);
+    }
+
+    XRef *xref = document->getXRef();
+    Object catalog = xref->getCatalog();
+    if (!catalog.isDict()) {
+        return makeError(Error::DamagedInput, "The PDF catalog is invalid.", pageCount);
+    }
+
+    std::vector<NamedDestinationEntry> entries = materializeNameTreeDestinations(document.get());
+    std::erase_if(entries, [&](const NamedDestinationEntry &entry) { return entry.name == name; });
+    entries.push_back(NamedDestinationEntry { name, destination.copy() });
+
+    Ref namesRef = Ref::INVALID();
+    Object names = catalog.getDict()->lookup("Names", &namesRef);
+    installDestinationNameTree(document.get(), &names, std::move(entries));
+    if (namesRef != Ref::INVALID()) {
+        xref->setModifiedObject(&names, namesRef);
+    } else {
+        catalog.getDict()->set("Names", std::move(names));
+        xref->setModifiedObject(&catalog, { .num = xref->getRootNum(), .gen = xref->getRootGen() });
+    }
+
+    // A legacy /Dests dictionary takes precedence over the name tree in
+    // Poppler. Mirror the value there when necessary so the target resolves.
+    Ref legacyDestsRef = Ref::INVALID();
+    Object legacyDests = catalog.getDict()->lookup("Dests", &legacyDestsRef);
+    if (legacyDests.isDict()) {
+        legacyDests.getDict()->set(name, destination.copy());
+        if (legacyDestsRef != Ref::INVALID()) {
+            xref->setModifiedObject(&legacyDests, legacyDestsRef);
+        } else {
+            xref->setModifiedObject(&catalog, { .num = xref->getRootNum(), .gen = xref->getRootGen() });
+        }
+    }
+
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result renameNamedDestination(const std::string &inputFileName,
+                              const std::string &outputFileName,
+                              const std::string &oldName,
+                              const std::string &newName)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (oldName.empty() || newName.empty()) {
+        return makeError(Error::InvalidArguments, "The named destination name is invalid.", pageCount);
+    }
+    if (oldName == newName) {
+        return saveEditedPdf(document.get(), outputFileName);
+    }
+
+    const GooString oldNameString(oldName);
+    const std::unique_ptr<LinkDest> oldDestination = document->getCatalog()->findDest(&oldNameString);
+    if (!oldDestination || !oldDestination->isOk()) {
+        return makeError(Error::InvalidArguments, "The named destination to rename does not exist.", pageCount);
+    }
+    const std::optional<Ref> pageRef = destinationPageRef(document.get(), *oldDestination);
+    if (!pageRef) {
+        return makeError(Error::PageError, "The named destination page could not be found.", pageCount);
+    }
+    Object destination = makeExplicitDestination(document->getXRef(), *oldDestination, *pageRef);
+
+    XRef *xref = document->getXRef();
+    Object catalog = xref->getCatalog();
+    if (!catalog.isDict()) {
+        return makeError(Error::DamagedInput, "The PDF catalog is invalid.", pageCount);
+    }
+
+    std::vector<NamedDestinationEntry> entries = materializeNameTreeDestinations(document.get());
+    std::erase_if(entries, [&](const NamedDestinationEntry &entry) { return entry.name == oldName || entry.name == newName; });
+    entries.push_back(NamedDestinationEntry { newName, destination.copy() });
+
+    Ref namesRef = Ref::INVALID();
+    Object names = catalog.getDict()->lookup("Names", &namesRef);
+    installDestinationNameTree(document.get(), &names, std::move(entries));
+    if (namesRef != Ref::INVALID()) {
+        xref->setModifiedObject(&names, namesRef);
+    } else {
+        catalog.getDict()->set("Names", std::move(names));
+        xref->setModifiedObject(&catalog, xref->getRoot());
+    }
+
+    Ref legacyDestsRef = Ref::INVALID();
+    Object legacyDests = catalog.getDict()->lookup("Dests", &legacyDestsRef);
+    if (legacyDests.isDict()) {
+        legacyDests.getDict()->remove(oldName);
+        legacyDests.getDict()->remove(newName);
+        legacyDests.getDict()->set(newName, destination.copy());
+        if (legacyDestsRef != Ref::INVALID()) {
+            xref->setModifiedObject(&legacyDests, legacyDestsRef);
+        } else {
+            xref->setModifiedObject(&catalog, xref->getRoot());
+        }
+    }
+
+    rewriteNamedDestinationReferences(document.get(), oldName, newName);
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result deleteNamedDestination(const std::string &inputFileName,
+                              const std::string &outputFileName,
+                              const std::string &name)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (name.empty()) {
+        return makeError(Error::InvalidArguments, "The named destination name is invalid.", pageCount);
+    }
+
+    const GooString nameString(name);
+    const std::unique_ptr<LinkDest> destination = document->getCatalog()->findDest(&nameString);
+    if (!destination || !destination->isOk()) {
+        return makeError(Error::InvalidArguments, "The named destination to delete does not exist.", pageCount);
+    }
+
+    XRef *xref = document->getXRef();
+    Object catalog = xref->getCatalog();
+    if (!catalog.isDict()) {
+        return makeError(Error::DamagedInput, "The PDF catalog is invalid.", pageCount);
+    }
+
+    std::vector<NamedDestinationEntry> entries = materializeNameTreeDestinations(document.get());
+    std::erase_if(entries, [&](const NamedDestinationEntry &entry) { return entry.name == name; });
+
+    Ref namesRef = Ref::INVALID();
+    Object names = catalog.getDict()->lookup("Names", &namesRef);
+    installDestinationNameTree(document.get(), &names, std::move(entries));
+    if (namesRef != Ref::INVALID()) {
+        xref->setModifiedObject(&names, namesRef);
+    } else {
+        catalog.getDict()->set("Names", std::move(names));
+        xref->setModifiedObject(&catalog, xref->getRoot());
+    }
+
+    Ref legacyDestsRef = Ref::INVALID();
+    Object legacyDests = catalog.getDict()->lookup("Dests", &legacyDestsRef);
+    if (legacyDests.isDict()) {
+        legacyDests.getDict()->remove(name);
+        if (legacyDestsRef != Ref::INVALID()) {
+            xref->setModifiedObject(&legacyDests, legacyDestsRef);
+        } else {
+            xref->setModifiedObject(&catalog, xref->getRoot());
+        }
+    }
+
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result editInternalLinkDestination(const std::string &inputFileName,
+                                   const std::string &outputFileName,
+                                   int sourcePageNumber,
+                                   double linkLeft,
+                                   double linkTop,
+                                   double linkRight,
+                                   double linkBottom,
+                                   const std::string &destinationName,
+                                   int destinationPageNumber,
+                                   double destinationX,
+                                   double destinationY)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (sourcePageNumber < 1 || sourcePageNumber > pageCount || linkLeft < 0.0 || linkTop < 0.0 || linkRight > 1.0 || linkBottom > 1.0 || linkLeft > linkRight || linkTop > linkBottom) {
+        return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
+    }
+    if (destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+        return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
+    }
+
+    Page *page = document->getPage(sourcePageNumber);
+    if (!page) {
+        return makeError(Error::PageError, "Could not read the source link page.", pageCount);
+    }
+
+    const NormalizedLinkRectangle requested { linkLeft, linkTop, linkRight, linkBottom };
+    std::shared_ptr<AnnotLink> selectedLink;
+    double selectedDistance = std::numeric_limits<double>::max();
+    for (const std::shared_ptr<Annot> &annotation : page->getAnnots()->getAnnots()) {
+        if (!annotation || annotation->getType() != Annot::typeLink) {
+            continue;
+        }
+        auto link = std::static_pointer_cast<AnnotLink>(annotation);
+        if (!link->getAction() || link->getAction()->getKind() != actionGoTo) {
+            continue;
+        }
+        const double distance = linkRectangleDistance(requested, normalizedLinkRectangle(page, link->getRect()));
+        if (distance < selectedDistance) {
+            selectedDistance = distance;
+            selectedLink = std::move(link);
+        }
+    }
+    if (!selectedLink || selectedDistance > 0.04) {
+        return makeError(Error::PageError, "Could not find the selected internal link.", pageCount);
+    }
+
+    Object destination;
+    if (!destinationName.empty()) {
+        const GooString destinationNameString(destinationName);
+        const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
+        if (!resolved || !resolved->isOk()) {
+            return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
+        }
+        destination = Object(std::string(destinationName));
+    } else {
+        destination = makeXyzDestination(document.get(), destinationPageNumber, destinationX, destinationY);
+        if (!destination.isArray()) {
+            return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
+        }
+    }
+
+    const Object &annotationObject = selectedLink->getAnnotObj();
+    if (!annotationObject.isDict()) {
+        return makeError(Error::PageError, "The selected link annotation is invalid.", pageCount);
+    }
+    annotationObject.getDict()->remove("A");
+    annotationObject.getDict()->set("Dest", std::move(destination));
+
+    XRef *xref = document->getXRef();
+    if (selectedLink->getHasRef()) {
+        xref->setModifiedObject(&annotationObject, selectedLink->getRef());
+    } else {
+        const Object &annotsReference = page->getPageObj().dictLookupNF("Annots");
+        if (annotsReference.isRef()) {
+            Object annots = annotsReference.fetch(xref);
+            xref->setModifiedObject(&annots, annotsReference.getRef());
+        } else {
+            xref->setModifiedObject(&page->getPageObj(), page->getRef());
+        }
+    }
+
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result createInternalLink(const std::string &inputFileName,
+                          const std::string &outputFileName,
+                          int sourcePageNumber,
+                          double linkLeft,
+                          double linkTop,
+                          double linkRight,
+                          double linkBottom,
+                          const std::string &destinationName,
+                          int destinationPageNumber,
+                          double destinationX,
+                          double destinationY)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (sourcePageNumber < 1 || sourcePageNumber > pageCount || linkLeft < 0.0 || linkTop < 0.0 || linkRight > 1.0 || linkBottom > 1.0 || linkLeft >= linkRight || linkTop >= linkBottom) {
+        return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
+    }
+    if (destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+        return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
+    }
+
+    Page *page = document->getPage(sourcePageNumber);
+    if (!page) {
+        return makeError(Error::PageError, "Could not read the source link page.", pageCount);
+    }
+
+    Object destination;
+    if (!destinationName.empty()) {
+        const GooString destinationNameString(destinationName);
+        const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
+        if (!resolved || !resolved->isOk()) {
+            return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
+        }
+        destination = Object(std::string(destinationName));
+    } else {
+        destination = makeXyzDestination(document.get(), destinationPageNumber, destinationX, destinationY);
+        if (!destination.isArray()) {
+            return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
+        }
+    }
+
+    double firstX = 0.0;
+    double firstY = 0.0;
+    double secondX = 0.0;
+    double secondY = 0.0;
+    if (!normalizedPointToUserCoordinates(page, linkLeft, linkTop, &firstX, &firstY)
+        || !normalizedPointToUserCoordinates(page, linkRight, linkBottom, &secondX, &secondY)) {
+        return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
+    }
+
+    PDFRectangle rectangle(std::min(firstX, secondX), std::min(firstY, secondY), std::max(firstX, secondX), std::max(firstY, secondY));
+    auto link = std::make_shared<AnnotLink>(document.get(), &rectangle);
+    const Object &annotationObject = link->getAnnotObj();
+    if (!link->isOk() || !annotationObject.isDict()) {
+        return makeError(Error::PageError, "Could not create the internal link annotation.", pageCount);
+    }
+    annotationObject.getDict()->set("Dest", std::move(destination));
+    auto *border = new Array(document->getXRef());
+    border->add(Object(0));
+    border->add(Object(0));
+    border->add(Object(0));
+    annotationObject.getDict()->set("Border", Object(border));
+    if (!page->addAnnot(link)) {
+        return makeError(Error::PageError, "Could not add the internal link annotation to the page.", pageCount);
+    }
+    document->getXRef()->setModifiedObject(&annotationObject, link->getRef());
+
+    return saveEditedPdf(document.get(), outputFileName);
 }
 
 }
