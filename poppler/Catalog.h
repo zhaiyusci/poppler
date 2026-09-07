@@ -179,6 +179,10 @@ public:
     // Get the i'th named destination link destination in name-tree
     std::unique_ptr<LinkDest> getDestNameTreeDest(int i);
 
+    // Refresh the in-memory views after a caller edits /Dests or the /Names
+    // destination tree through XRef.
+    void invalidateNamedDestinationCache();
+
     // Get the number of embedded files
     int numEmbeddedFiles() { return getEmbeddedFileNameTree()->numEntries(); }
 

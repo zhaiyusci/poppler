@@ -492,6 +492,21 @@ std::unique_ptr<LinkDest> Catalog::getDestNameTreeDest(int i)
     return createLinkDest(&obj);
 }
 
+void Catalog::invalidateNamedDestinationCache()
+{
+    catalogLocker();
+    Object catalog = xref->getCatalog();
+    if (catalog.isDict()) {
+        dests = catalog.dictLookup("Dests");
+        names = catalog.dictLookup("Names");
+    } else {
+        dests.setToNull();
+        names.setToNull();
+    }
+    delete destNameTree;
+    destNameTree = nullptr;
+}
+
 std::unique_ptr<FileSpec> Catalog::embeddedFile(int i)
 {
     catalogLocker();

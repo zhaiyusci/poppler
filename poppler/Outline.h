@@ -67,6 +67,9 @@ public:
         std::string title;
         int destPageNum;
         std::vector<OutlineTreeNode> children;
+        // When set, /Dest stores the named destination directly.  The page
+        // number remains the fallback for callers creating direct targets.
+        std::string destinationName;
     };
 
     // insert/remove child don't propagate changes to 'Count' up the entire

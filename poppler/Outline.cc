@@ -276,21 +276,6 @@ int Outline::addOutlineTreeNodeList(const std::vector<OutlineTreeNode> &nodeList
 
     for (const auto &node : nodeList) {
 
-        auto *a = new Array(doc->getXRef());
-        Ref *pageRef = doc->getCatalog()->getPageRef(node.destPageNum);
-        if (pageRef != nullptr) {
-            a->add(Object(*pageRef));
-        } else {
-            // if the page obj doesn't exist put the page number
-            // PDF32000-2008 12.3.2.2 Para 2
-            // as if it's a "Remote-Go-To Actions"
-            // it's not strictly valid, but most viewers seem
-            // to handle it without crashing
-            // alternately, could put 0, or omit it
-            a->add(Object(node.destPageNum - 1));
-        }
-        a->add(Object(objName, "Fit"));
-
         Object outlineItem = Object(new Dict(doc->getXRef()));
         Ref outlineItemRef = doc->getXRef()->addIndirectObject(outlineItem);
 
@@ -300,7 +285,25 @@ int Outline::addOutlineTreeNodeList(const std::vector<OutlineTreeNode> &nodeList
         lastRef = outlineItemRef;
 
         outlineItem.dictSet("Title", Object(std::make_unique<GooString>(node.title)));
-        outlineItem.dictSet("Dest", Object(a));
+        if (!node.destinationName.empty()) {
+            outlineItem.dictSet("Dest", Object(std::make_unique<GooString>(node.destinationName)));
+        } else {
+            auto *a = new Array(doc->getXRef());
+            Ref *pageRef = doc->getCatalog()->getPageRef(node.destPageNum);
+            if (pageRef != nullptr) {
+                a->add(Object(*pageRef));
+            } else {
+                // if the page obj doesn't exist put the page number
+                // PDF32000-2008 12.3.2.2 Para 2
+                // as if it's a "Remote-Go-To Actions"
+                // it's not strictly valid, but most viewers seem
+                // to handle it without crashing
+                // alternately, could put 0, or omit it
+                a->add(Object(node.destPageNum - 1));
+            }
+            a->add(Object(objName, "Fit"));
+            outlineItem.dictSet("Dest", Object(a));
+        }
         itemCount++;
 
         if (prevNodeRef != Ref::INVALID()) {

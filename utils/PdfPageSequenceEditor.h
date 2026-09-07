@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+class PDFDoc;
+
 namespace PdfPageSequenceEditor {
 
 enum class Error
@@ -29,6 +31,12 @@ enum class NamedDestinationConflictPolicy
 {
     KeepNames,
     AddSuffixes,
+};
+
+enum class NamedDestinationView
+{
+    XYZ,
+    FitWidth,
 };
 
 struct Result
@@ -51,6 +59,9 @@ Result deletePage(const std::string &inputFileName, const std::string &outputFil
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);
 Result rotatePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, int rotationDegrees);
+// Updates an already-open document without writing it. This lets callers
+// change a named destination and another PDF structure atomically.
+Result setNamedDestination(PDFDoc *document, const std::string &name, int pageNumber, double normalizedX, double normalizedY, NamedDestinationView view = NamedDestinationView::XYZ);
 Result addNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name, int pageNumber, double normalizedX, double normalizedY);
 Result renameNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &oldName, const std::string &newName);
 Result deleteNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name);

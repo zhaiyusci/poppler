@@ -513,6 +513,23 @@ Object makeXyzDestination(PDFDoc *doc, int pageNumber, double normalizedX, doubl
     return Object(destination);
 }
 
+Object makeFitWidthDestination(PDFDoc *doc, int pageNumber, double normalizedY)
+{
+    Page *page = doc ? doc->getPage(pageNumber) : nullptr;
+    Ref *pageRef = doc ? doc->getCatalog()->getPageRef(pageNumber) : nullptr;
+    double unusedUserX = 0.0;
+    double userY = 0.0;
+    if (!page || !pageRef || !normalizedPointToUserCoordinates(page, 0.0, normalizedY, &unusedUserX, &userY)) {
+        return Object::null();
+    }
+
+    auto *destination = new Array(doc->getXRef());
+    destination->add(Object(*pageRef));
+    destination->add(Object(objName, "FitH"));
+    destination->add(Object(userY));
+    return Object(destination);
+}
+
 struct NormalizedLinkRectangle
 {
     double left = 0.0;
@@ -1433,19 +1450,14 @@ Result rotatePage(const std::string &inputFileName, const std::string &outputFil
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
-Result addNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name, int pageNumber, double normalizedX, double normalizedY)
+Result setNamedDestination(PDFDoc *document, const std::string &name, int pageNumber, double normalizedX, double normalizedY, NamedDestinationView view)
 {
-    std::unique_ptr<PDFDoc> document;
-    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
-    if (!openResult.ok()) {
-        return openResult;
-    }
-    const int pageCount = document->getNumPages();
+    const int pageCount = document ? document->getNumPages() : 0;
     if (name.empty() || pageNumber < 1 || pageNumber > pageCount) {
         return makeError(Error::InvalidArguments, "The named destination name or page is invalid.", pageCount);
     }
 
-    Object destination = makeXyzDestination(document.get(), pageNumber, normalizedX, normalizedY);
+    Object destination = view == NamedDestinationView::FitWidth ? makeFitWidthDestination(document, pageNumber, normalizedY) : makeXyzDestination(document, pageNumber, normalizedX, normalizedY);
     if (!destination.isArray()) {
         return makeError(Error::InvalidArguments, "The named destination position is invalid.", pageCount);
     }
@@ -1456,13 +1468,13 @@ Result addNamedDestination(const std::string &inputFileName, const std::string &
         return makeError(Error::DamagedInput, "The PDF catalog is invalid.", pageCount);
     }
 
-    std::vector<NamedDestinationEntry> entries = materializeNameTreeDestinations(document.get());
+    std::vector<NamedDestinationEntry> entries = materializeNameTreeDestinations(document);
     std::erase_if(entries, [&](const NamedDestinationEntry &entry) { return entry.name == name; });
     entries.push_back(NamedDestinationEntry { name, destination.copy() });
 
     Ref namesRef = Ref::INVALID();
     Object names = catalog.getDict()->lookup("Names", &namesRef);
-    installDestinationNameTree(document.get(), &names, std::move(entries));
+    installDestinationNameTree(document, &names, std::move(entries));
     if (namesRef != Ref::INVALID()) {
         xref->setModifiedObject(&names, namesRef);
     } else {
@@ -1481,6 +1493,23 @@ Result addNamedDestination(const std::string &inputFileName, const std::string &
         } else {
             xref->setModifiedObject(&catalog, { .num = xref->getRootNum(), .gen = xref->getRootGen() });
         }
+    }
+
+    document->getCatalog()->invalidateNamedDestinationCache();
+
+    return { Error::None, std::string(), pageCount, pageCount };
+}
+
+Result addNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name, int pageNumber, double normalizedX, double normalizedY)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    Result editResult = setNamedDestination(document.get(), name, pageNumber, normalizedX, normalizedY);
+    if (!editResult.ok()) {
+        return editResult;
     }
 
     return saveEditedPdf(document.get(), outputFileName);
