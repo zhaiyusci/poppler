@@ -1744,6 +1744,77 @@ Result createInternalLink(const std::string &inputFileName, const std::string &o
     return saveEditedPdf(document.get(), outputFileName);
 }
 
+Result editLinkRectangle(const std::string &inputFileName,
+                         const std::string &outputFileName,
+                         int sourcePageNumber,
+                         double oldLinkLeft,
+                         double oldLinkTop,
+                         double oldLinkRight,
+                         double oldLinkBottom,
+                         double newLinkLeft,
+                         double newLinkTop,
+                         double newLinkRight,
+                         double newLinkBottom)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    const auto validRectangle = [](double left, double top, double right, double bottom) { return left >= 0.0 && top >= 0.0 && right <= 1.0 && bottom <= 1.0 && left < right && top < bottom; };
+    if (sourcePageNumber < 1 || sourcePageNumber > pageCount || !validRectangle(oldLinkLeft, oldLinkTop, oldLinkRight, oldLinkBottom) || !validRectangle(newLinkLeft, newLinkTop, newLinkRight, newLinkBottom)) {
+        return makeError(Error::InvalidArguments, "The link rectangle is invalid.", pageCount);
+    }
+
+    Page *page = document->getPage(sourcePageNumber);
+    if (!page) {
+        return makeError(Error::PageError, "Could not read the link page.", pageCount);
+    }
+
+    const NormalizedLinkRectangle requested { oldLinkLeft, oldLinkTop, oldLinkRight, oldLinkBottom };
+    std::shared_ptr<Annot> selectedLink;
+    double selectedDistance = std::numeric_limits<double>::max();
+    for (const std::shared_ptr<Annot> &annotation : page->getAnnots()->getAnnots()) {
+        if (!annotation || annotation->getType() != Annot::typeLink) {
+            continue;
+        }
+        const double distance = linkRectangleDistance(requested, normalizedLinkRectangle(page, annotation->getRect()));
+        if (distance < selectedDistance) {
+            selectedDistance = distance;
+            selectedLink = annotation;
+        }
+    }
+    if (!selectedLink || selectedDistance > 0.04) {
+        return makeError(Error::PageError, "Could not find the selected link.", pageCount);
+    }
+
+    double firstX = 0.0;
+    double firstY = 0.0;
+    double secondX = 0.0;
+    double secondY = 0.0;
+    if (!normalizedPointToUserCoordinates(page, newLinkLeft, newLinkTop, &firstX, &firstY) || !normalizedPointToUserCoordinates(page, newLinkRight, newLinkBottom, &secondX, &secondY)) {
+        return makeError(Error::InvalidArguments, "The new link rectangle is invalid.", pageCount);
+    }
+
+    selectedLink->setRect(PDFRectangle(std::min(firstX, secondX), std::min(firstY, secondY), std::max(firstX, secondX), std::max(firstY, secondY)));
+    const Object &annotationObject = selectedLink->getAnnotObj();
+    XRef *xref = document->getXRef();
+    if (selectedLink->getHasRef()) {
+        xref->setModifiedObject(&annotationObject, selectedLink->getRef());
+    } else {
+        const Object &annotsReference = page->getPageObj().dictLookupNF("Annots");
+        if (annotsReference.isRef()) {
+            Object annots = annotsReference.fetch(xref);
+            xref->setModifiedObject(&annots, annotsReference.getRef());
+        } else {
+            xref->setModifiedObject(&page->getPageObj(), page->getRef());
+        }
+    }
+
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
 Result deleteLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom)
 {
     std::unique_ptr<PDFDoc> document;

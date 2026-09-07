@@ -58,6 +58,17 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
                                    int destinationPageNumber, double destinationX, double destinationY);
 Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
                           int destinationPageNumber, double destinationX, double destinationY);
+Result editLinkRectangle(const std::string &inputFileName,
+                         const std::string &outputFileName,
+                         int sourcePageNumber,
+                         double oldLinkLeft,
+                         double oldLinkTop,
+                         double oldLinkRight,
+                         double oldLinkBottom,
+                         double newLinkLeft,
+                         double newLinkTop,
+                         double newLinkRight,
+                         double newLinkBottom);
 Result deleteLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom);
 
 }
