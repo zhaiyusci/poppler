@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -40,6 +41,7 @@
 #include "Link.h"
 #include "Object.h"
 #include "Page.h"
+#include "XRef.h"
 
 namespace {
 
@@ -1629,8 +1631,19 @@ Result deleteNamedDestination(const std::string &inputFileName, const std::strin
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result editInternalLinkDestination(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
-                                   int destinationPageNumber, double destinationX, double destinationY)
+static Result editLinkDestination(const std::string &inputFileName,
+                                  const std::string &outputFileName,
+                                  int sourcePageNumber,
+                                  double linkLeft,
+                                  double linkTop,
+                                  double linkRight,
+                                  double linkBottom,
+                                  const std::string &destinationName,
+                                  int destinationPageNumber,
+                                  double destinationX,
+                                  double destinationY,
+                                  const std::string &externalUrl,
+                                  bool useExternalUrl)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1641,7 +1654,10 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
     if (sourcePageNumber < 1 || sourcePageNumber > pageCount || linkLeft < 0.0 || linkTop < 0.0 || linkRight > 1.0 || linkBottom > 1.0 || linkLeft > linkRight || linkTop > linkBottom) {
         return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
     }
-    if (destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+    if (useExternalUrl && externalUrl.empty()) {
+        return makeError(Error::InvalidArguments, "The external link URL is invalid.", pageCount);
+    }
+    if (!useExternalUrl && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
         return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
     }
 
@@ -1658,9 +1674,6 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
             continue;
         }
         auto link = std::static_pointer_cast<AnnotLink>(annotation);
-        if (!link->getAction() || link->getAction()->getKind() != actionGoTo) {
-            continue;
-        }
         const double distance = linkRectangleDistance(requested, normalizedLinkRectangle(page, link->getRect()));
         if (distance < selectedDistance) {
             selectedDistance = distance;
@@ -1668,18 +1681,18 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
         }
     }
     if (!selectedLink || selectedDistance > 0.04) {
-        return makeError(Error::PageError, "Could not find the selected internal link.", pageCount);
+        return makeError(Error::PageError, "Could not find the selected link.", pageCount);
     }
 
     Object destination;
-    if (!destinationName.empty()) {
+    if (!useExternalUrl && !destinationName.empty()) {
         const GooString destinationNameString(destinationName);
         const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
         if (!resolved || !resolved->isOk()) {
             return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
         }
         destination = Object(std::string(destinationName));
-    } else {
+    } else if (!useExternalUrl) {
         destination = makeXyzDestination(document.get(), destinationPageNumber, destinationX, destinationY);
         if (!destination.isArray()) {
             return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
@@ -1690,10 +1703,18 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
     if (!annotationObject.isDict()) {
         return makeError(Error::PageError, "The selected link annotation is invalid.", pageCount);
     }
-    annotationObject.getDict()->remove("A");
-    annotationObject.getDict()->set("Dest", std::move(destination));
-
     XRef *xref = document->getXRef();
+    if (useExternalUrl) {
+        auto *action = new Dict(xref);
+        action->set("S", Object(objName, "URI"));
+        action->set("URI", Object(std::string(externalUrl)));
+        annotationObject.getDict()->remove("Dest");
+        annotationObject.getDict()->set("A", Object(action));
+    } else {
+        annotationObject.getDict()->remove("A");
+        annotationObject.getDict()->set("Dest", std::move(destination));
+    }
+
     if (selectedLink->getHasRef()) {
         xref->setModifiedObject(&annotationObject, selectedLink->getRef());
     } else {
@@ -1709,8 +1730,37 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
-                          int destinationPageNumber, double destinationX, double destinationY)
+Result editInternalLinkDestination(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
+                                   int destinationPageNumber, double destinationX, double destinationY)
+{
+    return editLinkDestination(inputFileName, outputFileName, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false);
+}
+
+Result editExternalLinkDestination(const std::string &inputFileName,
+                                   const std::string &outputFileName,
+                                   int sourcePageNumber,
+                                   double linkLeft,
+                                   double linkTop,
+                                   double linkRight,
+                                   double linkBottom,
+                                   const std::string &url)
+{
+    return editLinkDestination(inputFileName, outputFileName, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true);
+}
+
+static Result createLink(const std::string &inputFileName,
+                         const std::string &outputFileName,
+                         int sourcePageNumber,
+                         double linkLeft,
+                         double linkTop,
+                         double linkRight,
+                         double linkBottom,
+                         const std::string &destinationName,
+                         int destinationPageNumber,
+                         double destinationX,
+                         double destinationY,
+                         const std::string &externalUrl,
+                         bool useExternalUrl)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1721,7 +1771,10 @@ Result createInternalLink(const std::string &inputFileName, const std::string &o
     if (sourcePageNumber < 1 || sourcePageNumber > pageCount || linkLeft < 0.0 || linkTop < 0.0 || linkRight > 1.0 || linkBottom > 1.0 || linkLeft >= linkRight || linkTop >= linkBottom) {
         return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
     }
-    if (destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+    if (useExternalUrl && externalUrl.empty()) {
+        return makeError(Error::InvalidArguments, "The external link URL is invalid.", pageCount);
+    }
+    if (!useExternalUrl && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
         return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
     }
 
@@ -1731,14 +1784,14 @@ Result createInternalLink(const std::string &inputFileName, const std::string &o
     }
 
     Object destination;
-    if (!destinationName.empty()) {
+    if (!useExternalUrl && !destinationName.empty()) {
         const GooString destinationNameString(destinationName);
         const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
         if (!resolved || !resolved->isOk()) {
             return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
         }
         destination = Object(std::string(destinationName));
-    } else {
+    } else if (!useExternalUrl) {
         destination = makeXyzDestination(document.get(), destinationPageNumber, destinationX, destinationY);
         if (!destination.isArray()) {
             return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
@@ -1757,20 +1810,38 @@ Result createInternalLink(const std::string &inputFileName, const std::string &o
     auto link = std::make_shared<AnnotLink>(document.get(), &rectangle);
     const Object &annotationObject = link->getAnnotObj();
     if (!link->isOk() || !annotationObject.isDict()) {
-        return makeError(Error::PageError, "Could not create the internal link annotation.", pageCount);
+        return makeError(Error::PageError, "Could not create the link annotation.", pageCount);
     }
-    annotationObject.getDict()->set("Dest", std::move(destination));
+    if (useExternalUrl) {
+        auto *action = new Dict(document->getXRef());
+        action->set("S", Object(objName, "URI"));
+        action->set("URI", Object(std::string(externalUrl)));
+        annotationObject.getDict()->set("A", Object(action));
+    } else {
+        annotationObject.getDict()->set("Dest", std::move(destination));
+    }
     auto *border = new Array(document->getXRef());
     border->add(Object(0));
     border->add(Object(0));
     border->add(Object(0));
     annotationObject.getDict()->set("Border", Object(border));
     if (!page->addAnnot(link)) {
-        return makeError(Error::PageError, "Could not add the internal link annotation to the page.", pageCount);
+        return makeError(Error::PageError, "Could not add the link annotation to the page.", pageCount);
     }
     document->getXRef()->setModifiedObject(&annotationObject, link->getRef());
 
     return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
+                          int destinationPageNumber, double destinationX, double destinationY)
+{
+    return createLink(inputFileName, outputFileName, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false);
+}
+
+Result createExternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url)
+{
+    return createLink(inputFileName, outputFileName, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true);
 }
 
 Result editLinkRectangle(const std::string &inputFileName,
@@ -1879,6 +1950,123 @@ Result deleteLink(const std::string &inputFileName, const std::string &outputFil
     }
 
     page->removeAnnot(selectedLink);
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result addOcrTextLayers(const std::string &inputFileName, const std::string &outputFileName, const std::vector<OcrPage> &pages)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+
+    const int pageCount = document->getNumPages();
+    for (const OcrPage &ocrPage : pages) {
+        if (ocrPage.pageNumber < 1 || ocrPage.pageNumber > pageCount) {
+            return makeError(Error::InvalidArguments, "An OCR page number is outside the document page range.", pageCount);
+        }
+    }
+
+    XRef *xref = document->getXRef();
+    auto *font = new Dict(xref);
+    font->add("Type", Object(objName, "Font"));
+    font->add("Subtype", Object(objName, "Type1"));
+    font->add("BaseFont", Object(objName, "Helvetica"));
+    font->add("Encoding", Object(objName, "WinAnsiEncoding"));
+    const Ref fontRef = xref->addIndirectObject(Object(font));
+
+    const auto escapePdfLiteral = [](const std::string &text) {
+        std::string escaped;
+        escaped.reserve(text.size());
+        for (const unsigned char character : text) {
+            if (character == '\\' || character == '(' || character == ')') {
+                escaped.push_back('\\');
+            }
+            if (character >= 0x20 && character <= 0x7e) {
+                escaped.push_back(static_cast<char>(character));
+            }
+        }
+        return escaped;
+    };
+
+    for (const OcrPage &ocrPage : pages) {
+        Page *page = document->getPage(ocrPage.pageNumber);
+        if (!page) {
+            return makeError(Error::PageError, "Could not read an OCR page.", pageCount);
+        }
+
+        std::ostringstream contents;
+        contents.setf(std::ios::fixed);
+        contents.precision(6);
+        contents << "q\nBT\n3 Tr\n";
+
+        int validWordCount = 0;
+        for (const OcrWord &word : ocrPage.words) {
+            const std::string text = escapePdfLiteral(word.text);
+            if (text.empty() || word.left < 0.0 || word.top < 0.0 || word.right > 1.0 || word.bottom > 1.0 || word.left >= word.right || word.top >= word.bottom) {
+                continue;
+            }
+
+            double originX = 0.0;
+            double originY = 0.0;
+            double rightX = 0.0;
+            double rightY = 0.0;
+            double topX = 0.0;
+            double topY = 0.0;
+            if (!normalizedPointToUserCoordinates(page, word.left, word.bottom, &originX, &originY)
+                || !normalizedPointToUserCoordinates(page, word.right, word.bottom, &rightX, &rightY)
+                || !normalizedPointToUserCoordinates(page, word.left, word.top, &topX, &topY)) {
+                continue;
+            }
+
+            // Helvetica is only a metrics carrier here: rendering mode 3 keeps
+            // the text invisible. Scale its baseline and cap height to the OCR
+            // word box so standard PDF extractors recover both text and layout.
+            const double nominalWidth = std::max(0.5, static_cast<double>(text.size()) * 0.5);
+            constexpr double nominalHeight = 0.72;
+            const double a = (rightX - originX) / nominalWidth;
+            const double b = (rightY - originY) / nominalWidth;
+            const double c = (topX - originX) / nominalHeight;
+            const double d = (topY - originY) / nominalHeight;
+            contents << "/MengsheeOCR 1 Tf\n" << a << ' ' << b << ' ' << c << ' ' << d << ' ' << originX << ' ' << originY << " Tm\n(" << text << ") Tj\n";
+            ++validWordCount;
+        }
+        contents << "ET\nQ\n";
+        if (validWordCount == 0) {
+            continue;
+        }
+
+        const std::string contentText = contents.str();
+        std::vector<char> contentBytes(contentText.begin(), contentText.end());
+        const Ref contentRef = xref->addStreamObject(new Dict(xref), std::move(contentBytes), StreamCompression::Compress);
+
+        Object pageObject = page->getPageObj().copy();
+        const Object &oldContents = pageObject.dictLookupNF("Contents");
+        auto *contentArray = new Array(xref);
+        if (oldContents.isArray()) {
+            const Array *oldArray = oldContents.getArray();
+            for (int i = 0; i < oldArray->getLength(); ++i) {
+                contentArray->add(oldArray->getNF(i).copy());
+            }
+        } else if (!oldContents.isNull()) {
+            contentArray->add(oldContents.copy());
+        }
+        contentArray->add(Object(contentRef));
+        pageObject.dictSet("Contents", Object(contentArray));
+
+        std::unique_ptr<Dict> resources(page->getResourceDictCopy(xref));
+        if (!resources) {
+            resources = std::make_unique<Dict>(xref);
+        }
+        Object fontResources = resources->lookup("Font");
+        std::unique_ptr<Dict> fonts(fontResources.isDict() ? fontResources.getDict()->copy(xref) : new Dict(xref));
+        fonts->set("MengsheeOCR", Object(fontRef));
+        resources->set("Font", Object(fonts.release()));
+        pageObject.dictSet("Resources", Object(resources.release()));
+        xref->setModifiedObject(&pageObject, page->getRef());
+    }
+
     return saveEditedPdf(document.get(), outputFileName);
 }
 

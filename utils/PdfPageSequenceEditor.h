@@ -49,6 +49,21 @@ struct Result
     bool ok() const { return error == Error::None; }
 };
 
+struct OcrWord
+{
+    std::string text;
+    double left = 0.0;
+    double top = 0.0;
+    double right = 0.0;
+    double bottom = 0.0;
+};
+
+struct OcrPage
+{
+    int pageNumber = 0;
+    std::vector<OcrWord> words;
+};
+
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber);
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, double width, double height);
 Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert,
@@ -69,6 +84,15 @@ Result editInternalLinkDestination(const std::string &inputFileName, const std::
                                    int destinationPageNumber, double destinationX, double destinationY);
 Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
                           int destinationPageNumber, double destinationX, double destinationY);
+Result editExternalLinkDestination(const std::string &inputFileName,
+                                   const std::string &outputFileName,
+                                   int sourcePageNumber,
+                                   double linkLeft,
+                                   double linkTop,
+                                   double linkRight,
+                                   double linkBottom,
+                                   const std::string &url);
+Result createExternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
 Result editLinkRectangle(const std::string &inputFileName,
                          const std::string &outputFileName,
                          int sourcePageNumber,
@@ -81,6 +105,7 @@ Result editLinkRectangle(const std::string &inputFileName,
                          double newLinkRight,
                          double newLinkBottom);
 Result deleteLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom);
+Result addOcrTextLayers(const std::string &inputFileName, const std::string &outputFileName, const std::vector<OcrPage> &pages);
 
 }
 
