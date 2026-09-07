@@ -41,8 +41,7 @@
 #include "Object.h"
 #include "Page.h"
 
-namespace
-{
+namespace {
 
 struct PageEntry
 {
@@ -147,9 +146,7 @@ std::string commonDestinationSuffix(const std::vector<std::string> &sourceNames,
 {
     for (int suffix = std::max(1, preferredSuffix);; ++suffix) {
         const std::string suffixText = "~" + std::to_string(suffix);
-        const bool hasConflict = std::ranges::any_of(sourceNames, [&](const std::string &sourceName) {
-            return usedNames.contains(sourceName + suffixText);
-        });
+        const bool hasConflict = std::ranges::any_of(sourceNames, [&](const std::string &sourceName) { return usedNames.contains(sourceName + suffixText); });
         if (!hasConflict) {
             return suffixText;
         }
@@ -194,7 +191,7 @@ std::vector<NamedDestinationEntry> materializeNameTreeDestinations(PDFDoc *doc)
 
 void installDestinationNameTree(PDFDoc *hostDoc, Object *names, std::vector<NamedDestinationEntry> entries)
 {
-    std::ranges::sort(entries, {}, &NamedDestinationEntry::name);
+    std::ranges::sort(entries, { }, &NamedDestinationEntry::name);
 
     if (!names->isDict()) {
         *names = Object(new Dict(hostDoc->getXRef()));
@@ -209,13 +206,7 @@ void installDestinationNameTree(PDFDoc *hostDoc, Object *names, std::vector<Name
     names->getDict()->set("Dests", Object(destinationTree));
 }
 
-DestinationNameMap cloneNamedDestinations(PDFDoc *hostDoc,
-                                          PDFDoc *sourceDoc,
-                                          int sourcePageNo,
-                                          const Ref &sourcePageRef,
-                                          const Ref &outputPageRef,
-                                          PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy,
-                                          Object *names,
+DestinationNameMap cloneNamedDestinations(PDFDoc *hostDoc, PDFDoc *sourceDoc, int sourcePageNo, const Ref &sourcePageRef, const Ref &outputPageRef, PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy, Object *names,
                                           Object *legacyDests)
 {
     std::set<std::string> usedNames;
@@ -277,14 +268,8 @@ DestinationNameMap cloneNamedDestinations(PDFDoc *hostDoc,
     return clones;
 }
 
-DestinationNameMap cloneNamedDestinationsForPages(PDFDoc *hostDoc,
-                                                  PDFDoc *sourceDoc,
-                                                  const std::map<Ref, Ref> &pageRefs,
-                                                  PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy,
-                                                  int preferredSuffix,
-                                                  std::set<std::string> *usedNames,
-                                                  std::vector<NamedDestinationEntry> *outputEntries,
-                                                  Object *legacyDests)
+DestinationNameMap cloneNamedDestinationsForPages(PDFDoc *hostDoc, PDFDoc *sourceDoc, const std::map<Ref, Ref> &pageRefs, PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy, int preferredSuffix,
+                                                  std::set<std::string> *usedNames, std::vector<NamedDestinationEntry> *outputEntries, Object *legacyDests)
 {
     DestinationNameMap clones;
     std::vector<std::pair<std::string, std::pair<std::unique_ptr<LinkDest>, Ref>>> sourceDestinations;
@@ -340,11 +325,14 @@ DestinationNameMap cloneNamedDestinationsForPages(PDFDoc *hostDoc,
     return clones;
 }
 
-enum class CopiedDestinationDisposition { Absent, Keep, Rewritten };
+enum class CopiedDestinationDisposition
+{
+    Absent,
+    Keep,
+    Rewritten
+};
 
-CopiedDestinationDisposition rewriteCopiedDestination(Dict *container,
-                                                       const char *key,
-                                                       const DestinationNameMap &clones)
+CopiedDestinationDisposition rewriteCopiedDestination(Dict *container, const char *key, const DestinationNameMap &clones)
 {
     Object destination = container->lookup(key);
     if (destination.isNull()) {
@@ -370,9 +358,7 @@ CopiedDestinationDisposition rewriteCopiedDestination(Dict *container,
     return CopiedDestinationDisposition::Rewritten;
 }
 
-void rewriteClonedNamedLinks(PDFDoc *doc,
-                              Dict *annotation,
-                              const DestinationNameMap &clones)
+void rewriteClonedNamedLinks(PDFDoc *doc, Dict *annotation, const DestinationNameMap &clones)
 {
     Object actionRef = annotation->lookupNF("A").copy();
     Object action = actionRef.fetch(doc->getXRef());
@@ -556,10 +542,7 @@ NormalizedLinkRectangle normalizedLinkRectangle(Page *page, const PDFRectangle &
     firstY = static_cast<int>(firstY + 0.5);
     secondX = static_cast<int>(secondX + 0.5);
     secondY = static_cast<int>(secondY + 0.5);
-    return { std::min(firstX, secondX) / pageWidth,
-             std::min(firstY, secondY) / pageHeight,
-             std::max(firstX, secondX) / pageWidth,
-             std::max(firstY, secondY) / pageHeight };
+    return { std::min(firstX, secondX) / pageWidth, std::min(firstY, secondY) / pageHeight, std::max(firstX, secondX) / pageWidth, std::max(firstY, secondY) / pageHeight };
 }
 
 double linkRectangleDistance(const NormalizedLinkRectangle &first, const NormalizedLinkRectangle &second)
@@ -582,7 +565,7 @@ PdfPageSequenceEditor::Result openEditablePdf(const std::string &inputFileName, 
         return makeError(PdfPageSequenceEditor::Error::EncryptedInput, "Could not edit encrypted input PDF.", doc->getNumPages());
     }
     *document = std::move(doc);
-    return {};
+    return { };
 }
 
 PdfPageSequenceEditor::Result saveEditedPdf(PDFDoc *document, const std::string &outputFileName)
@@ -669,13 +652,7 @@ bool markCatalogObjects(PDFDoc *doc, XRef *yRef, XRef *countRef, Object *intents
     return true;
 }
 
-bool appendExistingPage(PDFDoc *doc,
-                        int pageNo,
-                        XRef *yRef,
-                        XRef *countRef,
-                        unsigned int numOffset,
-                        std::vector<PageEntry> *pages,
-                        const DestinationNameMap *clonedDestinations = nullptr)
+bool appendExistingPage(PDFDoc *doc, int pageNo, XRef *yRef, XRef *countRef, unsigned int numOffset, std::vector<PageEntry> *pages, const DestinationNameMap *clonedDestinations = nullptr)
 {
     Page *pageInfo = doc->getCatalog()->getPage(pageNo);
     if (!pageInfo) {
@@ -1003,7 +980,7 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
             ok = false;
         }
         const Ref outputPageRef { .num = sourcePageRef ? sourcePageRef->num + static_cast<int>(numOffset) : -1, .gen = sourcePageRef ? sourcePageRef->gen : 0 };
-        const DestinationNameMap clonedDestinations = ok ? cloneNamedDestinations(doc.get(), insertedDoc.get(), edit.insertPdfPage, *sourcePageRef, outputPageRef, edit.destinationConflictPolicy, &names, &dests) : DestinationNameMap {};
+        const DestinationNameMap clonedDestinations = ok ? cloneNamedDestinations(doc.get(), insertedDoc.get(), edit.insertPdfPage, *sourcePageRef, outputPageRef, edit.destinationConflictPolicy, &names, &dests) : DestinationNameMap { };
         std::vector<PageEntry> insertedPages;
         if (ok) {
             ok = appendExistingPage(insertedDoc.get(), edit.insertPdfPage, yRef, countRef, numOffset, &insertedPages, &clonedDestinations);
@@ -1112,9 +1089,7 @@ PdfPageSequenceEditor::Result writePageSequence(const std::string &inputFileName
     return PdfPageSequenceEditor::Result { PdfPageSequenceEditor::Error::None, std::string(), pageCount, static_cast<int>(pages.size()) };
 }
 
-PdfPageSequenceEditor::Result combinePdfFilesImpl(const std::vector<std::string> &inputFileNames,
-                                                  const std::string &outputFileName,
-                                                  PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy)
+PdfPageSequenceEditor::Result combinePdfFilesImpl(const std::vector<std::string> &inputFileNames, const std::string &outputFileName, PdfPageSequenceEditor::NamedDestinationConflictPolicy conflictPolicy)
 {
     if (inputFileNames.size() < 2 || outputFileName.empty()) {
         return makeError(PdfPageSequenceEditor::Error::InvalidArguments, "At least two input PDFs and one output file are required.");
@@ -1366,8 +1341,7 @@ PdfPageSequenceEditor::Result combinePdfFilesImpl(const std::vector<std::string>
 
 }
 
-namespace PdfPageSequenceEditor
-{
+namespace PdfPageSequenceEditor {
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
@@ -1385,12 +1359,7 @@ Result insertBlankPageAfter(const std::string &inputFileName, const std::string 
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
-Result insertPdfPageAfter(const std::string &inputFileName,
-                          const std::string &outputFileName,
-                          int pageNumber,
-                          const std::string &insertedFileName,
-                          int pageToInsert,
-                          NamedDestinationConflictPolicy conflictPolicy)
+Result insertPdfPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, const std::string &insertedFileName, int pageToInsert, NamedDestinationConflictPolicy conflictPolicy)
 {
     PageSequenceEdit edit;
     edit.insertPdfPageAfter = pageNumber;
@@ -1464,12 +1433,7 @@ Result rotatePage(const std::string &inputFileName, const std::string &outputFil
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
 
-Result addNamedDestination(const std::string &inputFileName,
-                           const std::string &outputFileName,
-                           const std::string &name,
-                           int pageNumber,
-                           double normalizedX,
-                           double normalizedY)
+Result addNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name, int pageNumber, double normalizedX, double normalizedY)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1522,10 +1486,7 @@ Result addNamedDestination(const std::string &inputFileName,
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result renameNamedDestination(const std::string &inputFileName,
-                              const std::string &outputFileName,
-                              const std::string &oldName,
-                              const std::string &newName)
+Result renameNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &oldName, const std::string &newName)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1588,9 +1549,7 @@ Result renameNamedDestination(const std::string &inputFileName,
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result deleteNamedDestination(const std::string &inputFileName,
-                              const std::string &outputFileName,
-                              const std::string &name)
+Result deleteNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1641,17 +1600,8 @@ Result deleteNamedDestination(const std::string &inputFileName,
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result editInternalLinkDestination(const std::string &inputFileName,
-                                   const std::string &outputFileName,
-                                   int sourcePageNumber,
-                                   double linkLeft,
-                                   double linkTop,
-                                   double linkRight,
-                                   double linkBottom,
-                                   const std::string &destinationName,
-                                   int destinationPageNumber,
-                                   double destinationX,
-                                   double destinationY)
+Result editInternalLinkDestination(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
+                                   int destinationPageNumber, double destinationX, double destinationY)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1730,17 +1680,8 @@ Result editInternalLinkDestination(const std::string &inputFileName,
     return saveEditedPdf(document.get(), outputFileName);
 }
 
-Result createInternalLink(const std::string &inputFileName,
-                          const std::string &outputFileName,
-                          int sourcePageNumber,
-                          double linkLeft,
-                          double linkTop,
-                          double linkRight,
-                          double linkBottom,
-                          const std::string &destinationName,
-                          int destinationPageNumber,
-                          double destinationX,
-                          double destinationY)
+Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
+                          int destinationPageNumber, double destinationX, double destinationY)
 {
     std::unique_ptr<PDFDoc> document;
     Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
@@ -1779,8 +1720,7 @@ Result createInternalLink(const std::string &inputFileName,
     double firstY = 0.0;
     double secondX = 0.0;
     double secondY = 0.0;
-    if (!normalizedPointToUserCoordinates(page, linkLeft, linkTop, &firstX, &firstY)
-        || !normalizedPointToUserCoordinates(page, linkRight, linkBottom, &secondX, &secondY)) {
+    if (!normalizedPointToUserCoordinates(page, linkLeft, linkTop, &firstX, &firstY) || !normalizedPointToUserCoordinates(page, linkRight, linkBottom, &secondX, &secondY)) {
         return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
     }
 
@@ -1801,6 +1741,44 @@ Result createInternalLink(const std::string &inputFileName,
     }
     document->getXRef()->setModifiedObject(&annotationObject, link->getRef());
 
+    return saveEditedPdf(document.get(), outputFileName);
+}
+
+Result deleteLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom)
+{
+    std::unique_ptr<PDFDoc> document;
+    Result openResult = openEditablePdf(inputFileName, outputFileName, &document);
+    if (!openResult.ok()) {
+        return openResult;
+    }
+    const int pageCount = document->getNumPages();
+    if (sourcePageNumber < 1 || sourcePageNumber > pageCount || linkLeft < 0.0 || linkTop < 0.0 || linkRight > 1.0 || linkBottom > 1.0 || linkLeft > linkRight || linkTop > linkBottom) {
+        return makeError(Error::InvalidArguments, "The source link position is invalid.", pageCount);
+    }
+
+    Page *page = document->getPage(sourcePageNumber);
+    if (!page) {
+        return makeError(Error::PageError, "Could not read the source link page.", pageCount);
+    }
+
+    const NormalizedLinkRectangle requested { linkLeft, linkTop, linkRight, linkBottom };
+    std::shared_ptr<Annot> selectedLink;
+    double selectedDistance = std::numeric_limits<double>::max();
+    for (const std::shared_ptr<Annot> &annotation : page->getAnnots()->getAnnots()) {
+        if (!annotation || annotation->getType() != Annot::typeLink) {
+            continue;
+        }
+        const double distance = linkRectangleDistance(requested, normalizedLinkRectangle(page, annotation->getRect()));
+        if (distance < selectedDistance) {
+            selectedDistance = distance;
+            selectedLink = annotation;
+        }
+    }
+    if (!selectedLink || selectedDistance > 0.04) {
+        return makeError(Error::PageError, "Could not find the selected link.", pageCount);
+    }
+
+    page->removeAnnot(selectedLink);
     return saveEditedPdf(document.get(), outputFileName);
 }
 
