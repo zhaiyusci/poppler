@@ -2118,7 +2118,7 @@ Goffset PDFDoc::getMainXRefEntriesOffset(bool tryingToReconstruct)
 
 int PDFDoc::getNumPages()
 {
-    if (isLinearized()) {
+    if (linearizationState != 2 && isLinearized()) {
         int n;
         if ((n = getLinearization()->getNumPages())) {
             return n;
@@ -2161,7 +2161,7 @@ Page *PDFDoc::getPage(int page)
         return nullptr;
     }
 
-    if (isLinearized() && checkLinearization()) {
+    if (linearizationState != 2 && isLinearized() && checkLinearization()) {
         pdfdocLocker();
         if (pageCache.empty()) {
             pageCache.resize(getNumPages());
@@ -2176,6 +2176,17 @@ Page *PDFDoc::getPage(int page)
     }
 
     return catalog->getPage(page);
+}
+
+void PDFDoc::invalidatePageTreeCache()
+{
+    pdfdocLocker();
+    // A mutated /Pages tree no longer matches the original linearization
+    // dictionary or hint table. Reuse the existing invalid state instead of
+    // adding per-instance storage, which would change PDFDoc's private ABI.
+    linearizationState = 2;
+    pageCache.clear();
+    catalog->invalidatePageTreeCache();
 }
 
 bool PDFDoc::hasJavascript()

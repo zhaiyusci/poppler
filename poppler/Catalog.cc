@@ -507,6 +507,23 @@ void Catalog::invalidateNamedDestinationCache()
     destNameTree = nullptr;
 }
 
+void Catalog::invalidatePageTreeCache()
+{
+    catalogLocker();
+    pages.clear();
+    refPageMap.clear();
+    delete pagesList;
+    pagesList = nullptr;
+    delete pagesRefList;
+    pagesRefList = nullptr;
+    attrsList.clear();
+    delete kidsIdxList;
+    kidsIdxList = nullptr;
+    numPages = -1;
+    delete pageLabelInfo;
+    pageLabelInfo = nullptr;
+}
+
 std::unique_ptr<FileSpec> Catalog::embeddedFile(int i)
 {
     catalogLocker();

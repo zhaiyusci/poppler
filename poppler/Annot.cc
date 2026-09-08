@@ -3116,6 +3116,20 @@ AnnotLink::AnnotLink(PDFDoc *docA, Object &&dictObject, const Object *obj) : Ann
 
 AnnotLink::~AnnotLink() = default;
 
+void AnnotLink::reloadAction()
+{
+    action.reset();
+    Object actionObject = annotObj.dictLookup("Dest");
+    if (!actionObject.isNull()) {
+        action = LinkAction::parseDest(&actionObject);
+        return;
+    }
+    actionObject = annotObj.dictLookup("A");
+    if (actionObject.isDict()) {
+        action = LinkAction::parseAction(&actionObject, doc->getCatalog()->getBaseURI());
+    }
+}
+
 void AnnotLink::initialize(Dict *dict)
 {
     Object obj1;

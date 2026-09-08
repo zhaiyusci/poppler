@@ -183,6 +183,9 @@ public:
     // destination tree through XRef.
     void invalidateNamedDestinationCache();
 
+    // Refresh the cached page tree after a caller edits /Pages through XRef.
+    void invalidatePageTreeCache();
+
     // Get the number of embedded files
     int numEmbeddedFiles() { return getEmbeddedFileNameTree()->numEntries(); }
 

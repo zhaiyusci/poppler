@@ -198,6 +198,9 @@ public:
     // Get page. First page is page 1.
     Page *getPage(int page);
 
+    // Drop page and linearization caches after an in-memory /Pages edit.
+    void invalidatePageTreeCache();
+
     // Display a page.
     void displayPage(OutputDev *out, int page, double hDPI, double vDPI, int rotate, bool useMediaBox, bool crop, bool printing, bool (*abortCheckCbk)(void *data) = nullptr, void *abortCheckCbkData = nullptr,
                      bool (*annotDisplayDecideCbk)(Annot *annot, void *user_data) = nullptr, void *annotDisplayDecideCbkData = nullptr, bool copyXRef = false);
@@ -414,7 +417,7 @@ private:
     // linearizationState = 0: unchecked
     // linearizationState = 1: checked and valid
     // linearizationState = 2: checked and invalid
-    int linearizationState;
+    int linearizationState = 0;
     XRef *xref = nullptr;
     SecurityHandler *secHdlr = nullptr;
     Catalog *catalog = nullptr;

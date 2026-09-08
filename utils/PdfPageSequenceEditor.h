@@ -9,6 +9,7 @@
 #ifndef PDF_PAGE_SEQUENCE_EDITOR_H
 #define PDF_PAGE_SEQUENCE_EDITOR_H
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -49,6 +50,9 @@ struct Result
     bool ok() const { return error == Error::None; }
 };
 
+class LivePageState;
+using LivePageStatePtr = std::shared_ptr<LivePageState>;
+
 struct OcrWord
 {
     std::string text;
@@ -74,27 +78,34 @@ Result deletePage(const std::string &inputFileName, const std::string &outputFil
 Result movePage(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, int destinationPageNumber);
 Result reorderPages(const std::string &inputFileName, const std::string &outputFileName, const std::vector<int> &pageOrder);
 Result rotatePage(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, int rotationDegrees);
+// Page operations on an already-open document. They edit XRef and /Pages in
+// memory; LivePageState keeps the small amount of state needed by undo/redo.
+Result insertBlankPageAfter(PDFDoc *document, int pageNumber, double width, double height, LivePageStatePtr *state);
+Result duplicatePageAfter(PDFDoc *document, int sourcePageNumber, int pageNumber, NamedDestinationConflictPolicy conflictPolicy, LivePageStatePtr *state);
+Result insertPdfPageAfter(PDFDoc *document,
+                          int pageNumber,
+                          const std::string &insertedFileName,
+                          int pageToInsert,
+                          NamedDestinationConflictPolicy conflictPolicy,
+                          LivePageStatePtr *state);
+Result detachPage(PDFDoc *document, int pageNumber, LivePageStatePtr *state);
+Result detachPage(PDFDoc *document, int pageNumber, const LivePageStatePtr &state);
+Result attachPageAfter(PDFDoc *document, int pageNumber, const LivePageStatePtr &state);
+Result movePage(PDFDoc *document, int sourcePageNumber, int destinationPageNumber);
+Result rotatePage(PDFDoc *document, int pageNumber, int rotationDegrees);
 // Updates an already-open document without writing it. This lets callers
 // change a named destination and another PDF structure atomically.
 Result setNamedDestination(PDFDoc *document, const std::string &name, int pageNumber, double normalizedX, double normalizedY, NamedDestinationView view = NamedDestinationView::XYZ);
-Result addNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name, int pageNumber, double normalizedX, double normalizedY);
-Result renameNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &oldName, const std::string &newName);
-Result deleteNamedDestination(const std::string &inputFileName, const std::string &outputFileName, const std::string &name);
-Result editInternalLinkDestination(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
-                                   int destinationPageNumber, double destinationX, double destinationY);
-Result createInternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName,
-                          int destinationPageNumber, double destinationX, double destinationY);
-Result editExternalLinkDestination(const std::string &inputFileName,
-                                   const std::string &outputFileName,
-                                   int sourcePageNumber,
-                                   double linkLeft,
-                                   double linkTop,
-                                   double linkRight,
-                                   double linkBottom,
-                                   const std::string &url);
-Result createExternalLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
-Result editLinkRectangle(const std::string &inputFileName,
-                         const std::string &outputFileName,
+Result renameNamedDestination(PDFDoc *document, const std::string &oldName, const std::string &newName);
+Result deleteNamedDestination(PDFDoc *document, const std::string &name);
+// The PDFDoc overloads update an already-open document in memory. They do not
+// write or reopen the file; callers can save all accumulated edits together.
+Result editInternalLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName, int destinationPageNumber, double destinationX,
+                                   double destinationY);
+Result createInternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName, int destinationPageNumber, double destinationX, double destinationY);
+Result editExternalLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
+Result createExternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
+Result editLinkRectangle(PDFDoc *document,
                          int sourcePageNumber,
                          double oldLinkLeft,
                          double oldLinkTop,
@@ -104,7 +115,7 @@ Result editLinkRectangle(const std::string &inputFileName,
                          double newLinkTop,
                          double newLinkRight,
                          double newLinkBottom);
-Result deleteLink(const std::string &inputFileName, const std::string &outputFileName, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom);
+Result deleteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom);
 Result addOcrTextLayers(const std::string &inputFileName, const std::string &outputFileName, const std::vector<OcrPage> &pages);
 
 }

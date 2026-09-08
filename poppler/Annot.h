@@ -1044,6 +1044,8 @@ public:
 
     // getters
     LinkAction *getAction() const { return action.get(); }
+    // Reparse Dest/A after an editor changes the annotation dictionary in memory.
+    void reloadAction();
     AnnotLinkEffect getLinkEffect() const { return linkEffect; }
     AnnotQuadrilaterals *getQuadrilaterals() const { return quadrilaterals.get(); }
 
