@@ -39,6 +39,7 @@
 #include "Error.h"
 #include "GfxState.h"
 #include "Link.h"
+#include "Lexer.h"
 #include "Object.h"
 #include "Page.h"
 #include "Stream.h"
@@ -2535,6 +2536,294 @@ Result deleteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, doubl
     return { Error::None, std::string(), pageCount, pageCount };
 }
 
+namespace {
+struct EditableOcrStream
+{
+    Ref reference;
+    std::string font;
+    std::vector<OcrWord> words;
+};
+
+// Accept only the complete, restricted grammar emitted by addOcrTextLayers.
+// A font-name match alone must never make arbitrary page content editable.
+bool parseOcrStream(PDFDoc *document, Page *page, Object stream, EditableOcrStream *result)
+{
+    const bool marked = stream.streamGetDict()->lookup("OCRTextLayer").isBool() && stream.streamGetDict()->lookup("OCRTextLayer").getBool();
+    Object storedFont = stream.streamGetDict()->lookup("OCRFont");
+    if (marked && (storedFont.isName("MengsheeOCR") || storedFont.isName("OCRText"))) {
+        result->font = storedFont.getName();
+    }
+    Lexer lexer(document->getXRef(), &stream);
+    if (!lexer.getObj().isCmd("q") || !lexer.getObj().isCmd("BT")) {
+        return false;
+    }
+    Object mode = lexer.getObj();
+    if (!mode.isInt() || mode.getInt() != 3 || !lexer.getObj().isCmd("Tr")) {
+        return false;
+    }
+    double width = page->getCropWidth(), height = page->getCropHeight();
+    if (page->getRotate() == 90 || page->getRotate() == 270) {
+        std::swap(width, height);
+    }
+    GfxState state(72, 72, page->getCropBox(), page->getRotate(), true);
+    for (;;) {
+        Object font = lexer.getObj();
+        if (font.isCmd("ET")) {
+            const bool valid = (!result->font.empty() || marked) && lexer.getObj().isCmd("Q") && lexer.getObj().isEOF();
+            if (!valid) {
+                return false;
+            }
+            Object baselines = stream.streamGetDict()->lookup("OCRBaselines");
+            if (baselines.isArray() && baselines.arrayGetLength() == static_cast<int>(result->words.size() * 4)) {
+                for (size_t i = 0; i < result->words.size(); ++i) {
+                    const Object &x1 = baselines.arrayGet(static_cast<int>(i * 4));
+                    const Object &y1 = baselines.arrayGet(static_cast<int>(i * 4 + 1));
+                    const Object &x2 = baselines.arrayGet(static_cast<int>(i * 4 + 2));
+                    const Object &y2 = baselines.arrayGet(static_cast<int>(i * 4 + 3));
+                    if (x1.isNum() && y1.isNum() && x2.isNum() && y2.isNum()) {
+                        result->words[i].baselineLeft = x1.getNum();
+                        result->words[i].baselineTop = y1.getNum();
+                        result->words[i].baselineRight = x2.getNum();
+                        result->words[i].baselineBottom = y2.getNum();
+                    }
+                }
+            }
+            Object rectangles = stream.streamGetDict()->lookup("OCRRectangles");
+            if (rectangles.isArray() && rectangles.arrayGetLength() == static_cast<int>(result->words.size() * 4)) {
+                for (size_t i = 0; i < result->words.size(); ++i) {
+                    const Object &left = rectangles.arrayGet(static_cast<int>(i * 4));
+                    const Object &top = rectangles.arrayGet(static_cast<int>(i * 4 + 1));
+                    const Object &right = rectangles.arrayGet(static_cast<int>(i * 4 + 2));
+                    const Object &bottom = rectangles.arrayGet(static_cast<int>(i * 4 + 3));
+                    if (left.isNum() && top.isNum() && right.isNum() && bottom.isNum()) {
+                        result->words[i].left = left.getNum();
+                        result->words[i].top = top.getNum();
+                        result->words[i].right = right.getNum();
+                        result->words[i].bottom = bottom.getNum();
+                    }
+                }
+            }
+            return true;
+        }
+        // The old resource name remains accepted for existing files.
+        if (!font.isName("MengsheeOCR") && !font.isName("OCRText")) {
+            return false;
+        }
+        if (!result->font.empty() && result->font != font.getName()) {
+            return false;
+        }
+        result->font = font.getName();
+        Object size = lexer.getObj();
+        if (!size.isNum() || size.getNum() != 1 || !lexer.getObj().isCmd("Tf")) {
+            return false;
+        }
+        double matrix[6];
+        for (double &value : matrix) {
+            Object number = lexer.getObj();
+            if (!number.isNum() || !std::isfinite(number.getNum())) {
+                return false;
+            }
+            value = number.getNum();
+        }
+        if (!lexer.getObj().isCmd("Tm")) {
+            return false;
+        }
+        Object text = lexer.getObj();
+        if (!text.isString() || !lexer.getObj().isCmd("Tj")) {
+            return false;
+        }
+        const std::string word = text.getString()->toStr();
+        if (word.empty() || std::ranges::any_of(word, [](unsigned char c) { return c < 32 || c > 126; })) {
+            return false;
+        }
+        // Older writers counted escaped literal bytes when calculating width.
+        const size_t escapedSize = word.size() + std::ranges::count_if(word, [](char c) { return c == '(' || c == ')' || c == '\\'; });
+        const double nominalWidth = std::max(0.5, escapedSize * 0.5);
+        OcrWord entry { word, 1, 1, 0, 0 };
+        for (const auto &[u, v] : std::array<std::pair<double, double>, 4> { { { 0, 0 }, { nominalWidth, 0 }, { 0, 0.72 }, { nominalWidth, 0.72 } } }) {
+            double x, y;
+            state.transform(matrix[4] + u * matrix[0] + v * matrix[2], matrix[5] + u * matrix[1] + v * matrix[3], &x, &y);
+            entry.left = std::min(entry.left, x / width);
+            entry.right = std::max(entry.right, x / width);
+            entry.top = std::min(entry.top, y / height);
+            entry.bottom = std::max(entry.bottom, y / height);
+        }
+        result->words.push_back(std::move(entry));
+    }
+}
+
+std::vector<EditableOcrStream> editableOcrStreams(PDFDoc *document, int pageNumber)
+{
+    std::vector<EditableOcrStream> streams;
+    Page *page = document->getPage(pageNumber);
+    if (!page) {
+        return streams;
+    }
+    auto consider = [&](const Object &entry) {
+        Object stream = entry.fetch(document->getXRef());
+        if (!entry.isRef() || !stream.isStream()) {
+            return;
+        }
+        EditableOcrStream parsed { entry.getRef(), {}, {} };
+        if (parseOcrStream(document, page, std::move(stream), &parsed)) {
+            streams.push_back(std::move(parsed));
+        }
+    };
+    const Object &contents = page->getPageObj().dictLookupNF("Contents");
+    Object fetched = contents.fetch(document->getXRef());
+    if (fetched.isArray()) {
+        for (int i = 0; i < fetched.arrayGetLength(); ++i) {
+            consider(fetched.arrayGetNF(i));
+        }
+    } else {
+        consider(contents);
+    }
+    return streams;
+}
+}
+
+Result readOcrTextLayer(PDFDoc *document, int pageNumber, std::vector<OcrWord> *words)
+{
+    if (!document || !words || pageNumber < 1 || pageNumber > document->getNumPages()) {
+        return makeError(Error::InvalidArguments, "Invalid OCR page.");
+    }
+    words->clear();
+    const auto streams = editableOcrStreams(document, pageNumber);
+    if (streams.empty()) {
+        return makeError(Error::PageError, "No supported OCR text layer on this page.");
+    }
+    for (const auto &stream : streams) {
+        words->insert(words->end(), stream.words.begin(), stream.words.end());
+    }
+    return { Error::None, {}, document->getNumPages(), document->getNumPages() };
+}
+
+Result replaceOcrTextLayer(PDFDoc *document, int pageNumber, const std::vector<OcrWord> &words)
+{
+    if (!document || pageNumber < 1 || pageNumber > document->getNumPages()) {
+        return makeError(Error::InvalidArguments, "Invalid OCR page.");
+    }
+    for (const auto &word : words) {
+        if (word.text.empty() || std::ranges::any_of(word.text, [](unsigned char c) { return c < 32 || c > 126; })
+            || !std::isfinite(word.left) || !std::isfinite(word.right) || !std::isfinite(word.top) || !std::isfinite(word.bottom)
+            || word.left < 0 || word.top < 0 || word.right > 1 || word.bottom > 1 || word.left >= word.right || word.top >= word.bottom) {
+            return makeError(Error::InvalidArguments, "OCR words require printable English text and valid page rectangles.");
+        }
+    }
+    const auto streams = editableOcrStreams(document, pageNumber);
+    if (streams.empty()) {
+        return makeError(Error::PageError, "No supported OCR text layer on this page.");
+    }
+    // Shared streams require copy-on-write page contents. Do not silently edit
+    // another page in PDFs produced by third-party page duplicators.
+    for (int number = 1; number <= document->getNumPages(); ++number) {
+        if (number == pageNumber) {
+            continue;
+        }
+        Page *other = document->getPage(number);
+        if (!other) {
+            return makeError(Error::PageError, "Could not check OCR stream ownership.");
+        }
+        const Object &raw = other->getPageObj().dictLookupNF("Contents");
+        Object contents = raw.fetch(document->getXRef());
+        auto shared = [&](const Object &entry) {
+            return entry.isRef() && std::ranges::any_of(streams, [&](const auto &s) { return s.reference == entry.getRef(); });
+        };
+        if (shared(raw)) {
+            return makeError(Error::PageError, "This OCR layer is shared with another page and cannot be edited independently.");
+        }
+        if (contents.isArray()) {
+            for (int i = 0; i < contents.arrayGetLength(); ++i) {
+                if (shared(contents.arrayGetNF(i))) {
+                    return makeError(Error::PageError, "This OCR layer is shared with another page and cannot be edited independently.");
+                }
+            }
+        }
+    }
+    Page *page = document->getPage(pageNumber);
+    GfxState state(72, 72, page->getCropBox(), page->getRotate(), true);
+    const auto &ctm = state.getCTM();
+    const double det = ctm[0] * ctm[3] - ctm[1] * ctm[2];
+    double width = page->getCropWidth(), height = page->getCropHeight();
+    if (page->getRotate() == 90 || page->getRotate() == 270) {
+        std::swap(width, height);
+    }
+    if (std::abs(det) < 1e-12 || width <= 0 || height <= 0) {
+        return makeError(Error::PageError, "Invalid OCR page geometry.");
+    }
+    auto point = [&](double x, double y) {
+        x = x * width - ctm[4];
+        y = y * height - ctm[5];
+        return std::pair((ctm[3] * x - ctm[2] * y) / det, (-ctm[1] * x + ctm[0] * y) / det);
+    };
+    XRef *xref = document->getXRef();
+    for (size_t index = 0; index < streams.size(); ++index) {
+        std::ostringstream output;
+        output.imbue(std::locale::classic());
+        output << std::fixed;
+        output.precision(9);
+        output << "q\nBT\n3 Tr\n";
+        if (index == 0) {
+            for (const auto &word : words) {
+                std::string escaped;
+                for (char c : word.text) {
+                    if (c == '(' || c == ')' || c == '\\') {
+                        escaped += '\\';
+                    }
+                    escaped += c;
+                }
+                const bool hasBaseline = std::isfinite(word.baselineLeft) && std::isfinite(word.baselineTop) && std::isfinite(word.baselineRight)
+                    && std::isfinite(word.baselineBottom) && word.baselineRight > word.baselineLeft;
+                const auto baselineAt = [&](double x) {
+                    if (!hasBaseline) {
+                        return word.bottom;
+                    }
+                    const double t = (x - word.baselineLeft) / (word.baselineRight - word.baselineLeft);
+                    return word.baselineTop + t * (word.baselineBottom - word.baselineTop);
+                };
+                auto [x, y] = point(word.left, baselineAt(word.left));
+                auto [rx, ry] = point(word.right, baselineAt(word.right));
+                auto [tx, ty] = point(word.left, word.top);
+                const double nominalWidth = std::max(0.5, escaped.size() * 0.5);
+                const std::string font = streams.front().font.empty() ? "MengsheeOCR" : streams.front().font;
+                output << '/' << font << " 1 Tf\n" << (rx - x) / nominalWidth << ' ' << (ry - y) / nominalWidth << ' '
+                       << (tx - x) / 0.718 << ' ' << (ty - y) / 0.718 << ' ' << x << ' ' << y << " Tm\n(" << escaped << ") Tj\n";
+            }
+        }
+        output << "ET\nQ\n";
+        const std::string bytes = output.str();
+        auto *dictionary = new Dict(xref);
+        dictionary->add("OCRTextLayer", Object(true));
+        dictionary->add("OCRFont", Object(objName, streams[index].font.empty() ? "MengsheeOCR" : streams[index].font.c_str()));
+        auto *baselines = new Array(xref);
+        const auto addCoordinate = [baselines](double value) { baselines->add(std::isfinite(value) ? Object(value) : Object()); };
+        if (index == 0) {
+            for (const auto &word : words) {
+                addCoordinate(word.baselineLeft);
+                addCoordinate(word.baselineTop);
+                addCoordinate(word.baselineRight);
+                addCoordinate(word.baselineBottom);
+            }
+        }
+        dictionary->add("OCRBaselines", Object(baselines));
+        auto *rectangles = new Array(xref);
+        if (index == 0) {
+            for (const auto &word : words) {
+                rectangles->add(Object(word.left));
+                rectangles->add(Object(word.top));
+                rectangles->add(Object(word.right));
+                rectangles->add(Object(word.bottom));
+            }
+        }
+        dictionary->add("OCRRectangles", Object(rectangles));
+        Ref replacement = xref->addStreamObject(dictionary, std::vector<char>(bytes.begin(), bytes.end()), StreamCompression::Compress);
+        Object stream = xref->fetch(replacement);
+        xref->setModifiedObject(&stream, streams[index].reference);
+        xref->removeIndirectObject(replacement);
+    }
+    return { Error::None, {}, document->getNumPages(), document->getNumPages() };
+}
+
 Result addOcrTextLayers(const std::string &inputFileName, const std::string &outputFileName, const std::vector<OcrPage> &pages)
 {
     std::unique_ptr<PDFDoc> document;
@@ -2578,6 +2867,15 @@ Result addOcrTextLayers(const std::string &inputFileName, const std::string &out
             return makeError(Error::PageError, "Could not read an OCR page.", pageCount);
         }
 
+        const auto existingStreams = editableOcrStreams(document.get(), ocrPage.pageNumber);
+        if (!existingStreams.empty()) {
+            Result replaceResult = replaceOcrTextLayer(document.get(), ocrPage.pageNumber, ocrPage.words);
+            if (!replaceResult.ok()) {
+                return replaceResult;
+            }
+            continue;
+        }
+
         std::ostringstream contents;
         contents.setf(std::ios::fixed);
         contents.precision(6);
@@ -2596,8 +2894,17 @@ Result addOcrTextLayers(const std::string &inputFileName, const std::string &out
             double rightY = 0.0;
             double topX = 0.0;
             double topY = 0.0;
-            if (!normalizedPointToUserCoordinates(page, word.left, word.bottom, &originX, &originY)
-                || !normalizedPointToUserCoordinates(page, word.right, word.bottom, &rightX, &rightY)
+            const bool hasBaseline = std::isfinite(word.baselineLeft) && std::isfinite(word.baselineTop) && std::isfinite(word.baselineRight)
+                && std::isfinite(word.baselineBottom) && word.baselineRight > word.baselineLeft;
+            const auto baselineAt = [&](double x) {
+                if (!hasBaseline) {
+                    return word.bottom;
+                }
+                const double t = (x - word.baselineLeft) / (word.baselineRight - word.baselineLeft);
+                return word.baselineTop + t * (word.baselineBottom - word.baselineTop);
+            };
+            if (!normalizedPointToUserCoordinates(page, word.left, baselineAt(word.left), &originX, &originY)
+                || !normalizedPointToUserCoordinates(page, word.right, baselineAt(word.right), &rightX, &rightY)
                 || !normalizedPointToUserCoordinates(page, word.left, word.top, &topX, &topY)) {
                 continue;
             }
@@ -2606,7 +2913,7 @@ Result addOcrTextLayers(const std::string &inputFileName, const std::string &out
             // the text invisible. Scale its baseline and cap height to the OCR
             // word box so standard PDF extractors recover both text and layout.
             const double nominalWidth = std::max(0.5, static_cast<double>(text.size()) * 0.5);
-            constexpr double nominalHeight = 0.72;
+            constexpr double nominalHeight = 0.718;
             const double a = (rightX - originX) / nominalWidth;
             const double b = (rightY - originY) / nominalWidth;
             const double c = (topX - originX) / nominalHeight;
@@ -2621,7 +2928,27 @@ Result addOcrTextLayers(const std::string &inputFileName, const std::string &out
 
         const std::string contentText = contents.str();
         std::vector<char> contentBytes(contentText.begin(), contentText.end());
-        const Ref contentRef = xref->addStreamObject(new Dict(xref), std::move(contentBytes), StreamCompression::Compress);
+        auto *ocrDictionary = new Dict(xref);
+        ocrDictionary->add("OCRTextLayer", Object(true));
+        ocrDictionary->add("OCRFont", Object(objName, "MengsheeOCR"));
+        auto *baselines = new Array(xref);
+        const auto addCoordinate = [baselines](double value) { baselines->add(std::isfinite(value) ? Object(value) : Object()); };
+        for (const OcrWord &word : ocrPage.words) {
+            addCoordinate(word.baselineLeft);
+            addCoordinate(word.baselineTop);
+            addCoordinate(word.baselineRight);
+            addCoordinate(word.baselineBottom);
+        }
+        ocrDictionary->add("OCRBaselines", Object(baselines));
+        auto *rectangles = new Array(xref);
+        for (const OcrWord &word : ocrPage.words) {
+            rectangles->add(Object(word.left));
+            rectangles->add(Object(word.top));
+            rectangles->add(Object(word.right));
+            rectangles->add(Object(word.bottom));
+        }
+        ocrDictionary->add("OCRRectangles", Object(rectangles));
+        const Ref contentRef = xref->addStreamObject(ocrDictionary, std::move(contentBytes), StreamCompression::Compress);
 
         Object pageObject = page->getPageObj().copy();
         const Object &oldContents = pageObject.dictLookupNF("Contents");

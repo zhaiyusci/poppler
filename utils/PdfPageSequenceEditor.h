@@ -10,6 +10,7 @@
 #define PDF_PAGE_SEQUENCE_EDITOR_H
 
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,13 @@ struct OcrWord
     double top = 0.0;
     double right = 0.0;
     double bottom = 0.0;
+    // Baseline endpoints in normalized, top-left page coordinates. NaN means
+    // that the source did not provide a baseline (for example a manually
+    // inserted word).
+    double baselineLeft = std::numeric_limits<double>::quiet_NaN();
+    double baselineTop = std::numeric_limits<double>::quiet_NaN();
+    double baselineRight = std::numeric_limits<double>::quiet_NaN();
+    double baselineBottom = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct OcrPage
@@ -117,6 +125,10 @@ Result editLinkRectangle(PDFDoc *document,
                          double newLinkBottom);
 Result deleteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom);
 Result addOcrTextLayers(const std::string &inputFileName, const std::string &outputFileName, const std::vector<OcrPage> &pages);
+// Reads and replaces the dedicated invisible text streams created by this editor.
+// Coordinates are normalized to the rotated crop box. Neither operation writes a file.
+Result readOcrTextLayer(PDFDoc *document, int pageNumber, std::vector<OcrWord> *words);
+Result replaceOcrTextLayer(PDFDoc *document, int pageNumber, const std::vector<OcrWord> &words);
 
 }
 
