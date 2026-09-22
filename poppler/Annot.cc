@@ -7305,10 +7305,22 @@ bool AnnotStamp::setCustomPdfPageAppearanceFromForm(Object &&innerForm, double s
         }
         appearanceBuilder.append("Q\n");
     }
-    if (contentOffsetX != 0.0 || contentOffsetY != 0.0) {
-        appearanceBuilder.appendf("q\n1 0 0 1 {0:.6f} {1:.6f} cm\n/Fm0 Do\nQ", contentOffsetX - sourceX1, contentOffsetY - sourceY1);
-    } else {
-        appearanceBuilder.append("/Fm0 Do");
+    // The outer appearance BBox may also contain a callout leader. It is not
+    // the content clip: keep the source inside the frame's visible inner edge.
+    // The frame path is inset by half its stroke width, so that inner edge is
+    // a full stroke width from the frame bounds. Padding only places content.
+    const double contentClipInset = drawFrame && borderColor->getSpace() != AnnotColor::colorTransparent && std::isfinite(options.borderWidth) ? std::max(0.0, options.borderWidth) : 0.0;
+    const double contentClipWidth = frameWidth - 2 * contentClipInset;
+    const double contentClipHeight = frameHeight - 2 * contentClipInset;
+    if (!drawFrame || (contentClipWidth > 0.0 && contentClipHeight > 0.0)) {
+        appearanceBuilder.append("q\n");
+        if (drawFrame) {
+            appearanceBuilder.appendf("{0:.6f} {1:.6f} {2:.6f} {3:.6f} re W n\n", frameX + contentClipInset, frameY + contentClipInset, contentClipWidth, contentClipHeight);
+        }
+        if (contentOffsetX != 0.0 || contentOffsetY != 0.0) {
+            appearanceBuilder.appendf("1 0 0 1 {0:.6f} {1:.6f} cm\n", contentOffsetX - sourceX1, contentOffsetY - sourceY1);
+        }
+        appearanceBuilder.append("/Fm0 Do\nQ");
     }
     Dict *resDict = createResourcesDict("Fm0", std::move(innerForm), "GS0", opacity, nullptr);
     Object newAppearance = createForm(appearanceBuilder.buffer(), outerBBoxArray, false, resDict);

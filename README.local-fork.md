@@ -13,12 +13,65 @@ must not be introduced into this repository.
   importing, deleting, moving, and reordering PDF pages.
 - `utils/PdfAnnotationFlattener.{h,cc}`, a Core API helper for flattening normal
   annotation appearances into a new PDF snapshot without rasterizing pages.
+- `utils/PdfPageBounds.{h,cc}`, a Core/Splash helper for expanding a generated
+  single-page appearance's logical bounds to include conservative painted bounds.
 - `utils/pdfpagesequence.cc`, an optional command-line frontend built when
   `ENABLE_UTILS` is enabled.
 
 The page-sequence editor uses Poppler's unstable Core C++ API and does not
 define a stable public ABI. Consumers that compile it directly must use source,
 generated private headers, and Poppler libraries from compatible revisions.
+
+## Custom PDF Stamp Frames
+
+When custom-PDF appearance options include a frame rectangle, only the source
+Form painting is clipped to that frame's visible inner edge. The border path
+is inset by half its stroke width, so the protected inner edge is one full
+visible stroke width inside the frame bounds; transparent/zero-width strokes
+add no inset. An exhausted content rectangle paints no source. Padding remains
+content placement, not an implicit resize or scale operation. The local clip
+must not cover frame or callout-leader painting, and must use frame coordinates
+rather than the potentially larger outer appearance BBox. Existing saved AP
+streams are not retroactively rewritten by merely opening a document.
+
+## Single-Page Appearance Bounds Helper
+
+`PdfPageBounds::expandAppearance(input, newOutput, padding)` compiles against the
+matching private Core/Splash headers and library; it does not add a public ABI.
+It is for valid generated appearance fragments, **not a general PDF editor**.
+The existing MediaBox is retained and unioned with conservative outline/path/image
+bounds plus caller-selected padding. Original content streams/resources remain
+vector/text content, surrounded by a translation to a zero-origin output page.
+There is no second typesetting pass or raster replacement.
+
+A 1×1 Splash provider resolves actual font outlines rather than using a font-wide
+ascent/descent box. Gfx inspects a large canvas so the old page does not clip away
+exterior content, including tiling patterns. Native path content, Type3 drawing,
+transformed image rectangles and ordinary clipping are handled. Cubic control
+hulls, stroke/miter envelopes, image rectangles and complex clips/soft masks may
+overestimate bounds; this is not an exact minimal ink crop. Precision allowances
+scale with font transforms rather than assuming a fixed error for anisotropic
+text. Unsupported Unicode substitution, missing outlines, PostScript XObjects
+and unsafe transforms fail rather than silently retaining a clipped result.
+
+The contract intentionally removes Annots/AcroForm interactivity from the
+appearance-only output. It rejects encrypted/signed or multi-page input, nonzero
+rotation and UserUnit other than 1. It must not be used to edit a user's original
+document or to preserve interactive annotation appearances. Input is read-only;
+output must be a new path. A sibling temporary file is checked and atomically
+published with a no-replace hard link. Filesystem hard-link support is required;
+existing files/aliases are not overwritten. Caller-level in-place replacement,
+if desired for a private renderer artifact, must be separately atomic.
+
+Limits include 64 MiB input/output and decoded non-image stream budgets,
+2,000,000 preflight nodes and paint/outline-point operations, nesting bounds,
+inspection coordinates within ±1,000,000bp and final spans at most 50,000bp.
+Font matrices with condition number above 4096 or near-singular effective device
+transforms are refused. The 15-second deadline is cooperative: it does not
+forcibly interrupt PDFDoc opening or an individual font-library call. Gfx lacks
+a per-document parser-error interface, and this helper does not replace a GUI's
+global error callback; it does not detect every malformed operator stream.
+These checks are neither a malicious-PDF sandbox nor a sanitization guarantee.
 
 ## Annotation Flattening Helper
 
