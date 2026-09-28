@@ -2409,11 +2409,12 @@ static Result createLink(PDFDoc *document,
         annotationObject.getDict()->set("Dest", std::move(destination));
     }
     link->reloadAction();
-    auto *border = new Array(document->getXRef());
-    border->add(Object(0));
-    border->add(Object(0));
-    border->add(Object(0));
-    annotationObject.getDict()->set("Border", Object(border));
+    // Update both the PDF dictionary and Annot's cached border. Editing only
+    // /Border leaves the default one-point outline in the live renderer until
+    // the document is reopened, despite saving an invisible border to disk.
+    auto border = std::make_unique<AnnotBorderArray>();
+    border->setWidth(0);
+    link->setBorder(std::move(border));
     if (!page->addAnnot(link)) {
         return makeError(Error::PageError, "Could not add the link annotation to the page.", pageCount);
     }
