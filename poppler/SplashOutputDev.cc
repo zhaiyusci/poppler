@@ -1084,102 +1084,6 @@ private:
 
 SplashOutFontFileID::~SplashOutFontFileID() = default;
 
-class SplashFallbackFontFileID : public SplashFontFileID
-{
-public:
-    SplashFallbackFontFileID(std::string pathA, int faceIndexA) : path(std::move(pathA)), faceIndex(faceIndexA) { }
-
-    ~SplashFallbackFontFileID() override = default;
-
-    bool matches(const SplashFontFileID &id) const override
-    {
-        const auto *other = dynamic_cast<const SplashFallbackFontFileID *>(&id);
-        return other && other->path == path && other->faceIndex == faceIndex;
-    }
-
-private:
-    std::string path;
-    int faceIndex;
-};
-
-static bool shouldUseUnicodeFallback(Unicode u)
-{
-    return u >= 0x80 && u <= 0xffff;
-}
-
-static bool shouldUseUnicodeFallbackForFont(const std::shared_ptr<GfxFont> &font)
-{
-    if (!font || font->isCIDFont() || font->isSymbolic()) {
-        return false;
-    }
-
-    Ref embeddedFontID;
-    return !font->getEmbeddedFontID(&embeddedFontID);
-}
-
-static std::vector<int> buildBMPUnicodeToGIDMap(const std::string &fontFile, int faceIndex)
-{
-    std::vector<int> codeToGID(65536, 0);
-    const std::unique_ptr<FoFiTrueType> ff = FoFiTrueType::load(fontFile.c_str(), faceIndex);
-    if (!ff) {
-        return {};
-    }
-
-    int cmap = -1;
-    for (int i = 0; i < ff->getNumCmaps(); ++i) {
-        const int platform = ff->getCmapPlatform(i);
-        const int encoding = ff->getCmapEncoding(i);
-        if (platform == 3 && encoding == 10) {
-            cmap = i;
-            break;
-        }
-        if (platform == 3 && encoding == 1) {
-            cmap = i;
-        } else if (platform == 0 && cmap < 0) {
-            cmap = i;
-        }
-    }
-    if (cmap < 0) {
-        return {};
-    }
-
-    for (int code = 0; code <= 0xffff; ++code) {
-        codeToGID[code] = ff->mapCodeToGID(cmap, code);
-    }
-    return codeToGID;
-}
-
-static SplashFont *getUnicodeFallbackFont(SplashFontEngine *fontEngine, GfxState *state, Unicode uChar, const std::array<SplashCoord, 6> &ctm)
-{
-    if (!fontEngine || !state || !state->getFont() || !shouldUseUnicodeFallback(uChar)) {
-        return nullptr;
-    }
-
-    const UCharFontSearchResult fontSearchResult = globalParams->findSystemFontFileForUChar(uChar, *state->getFont());
-    if (fontSearchResult.filepath.empty()) {
-        return nullptr;
-    }
-
-    auto id = std::make_unique<SplashFallbackFontFileID>(fontSearchResult.filepath, fontSearchResult.faceIndex);
-    std::shared_ptr<SplashFontFile> fontFile = fontEngine->getFontFile(*id);
-    if (!fontFile) {
-        std::vector<int> codeToGID = buildBMPUnicodeToGIDMap(fontSearchResult.filepath, fontSearchResult.faceIndex);
-        if (codeToGID.empty() || codeToGID[uChar] == 0) {
-            return nullptr;
-        }
-        auto fontSrc = std::make_unique<SplashFontSrc>(fontSearchResult.filepath);
-        fontFile = fontEngine->loadTrueTypeFont(std::move(id), std::move(fontSrc), std::move(codeToGID), fontSearchResult.faceIndex);
-        if (!fontFile) {
-            return nullptr;
-        }
-    }
-
-    const std::array<double, 6> &textMat = state->getTextMat();
-    const double fontSize = state->getFontSize();
-    const std::array<SplashCoord, 4> mat = { (SplashCoord)(textMat[0] * fontSize * state->getHorizScaling()), (SplashCoord)(textMat[1] * fontSize * state->getHorizScaling()), (SplashCoord)(textMat[2] * fontSize), (SplashCoord)(textMat[3] * fontSize) };
-    return fontEngine->getFont(fontFile, mat, ctm);
-}
-
 //------------------------------------------------------------------------
 // T3FontCache
 //------------------------------------------------------------------------
@@ -2221,15 +2125,13 @@ SplashPath SplashOutputDev::convertPath(const GfxPath *path, bool dropEmptySubpa
     return sPath;
 }
 
-void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*/, double /*dy*/, double originX, double originY, CharCode code, int /*nBytes*/, const Unicode *u, int uLen)
+void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*/, double /*dy*/, double originX, double originY, CharCode code, int /*nBytes*/, const Unicode * /*u*/, int /*uLen*/)
 {
     SplashPath *path;
     int render;
     bool doFill, doStroke, doClip, strokeAdjust;
     double m[4];
     bool horiz;
-    SplashFont *drawFont;
-    CharCode drawCode;
 
     if (skipHorizText || skipRotatedText) {
         state->getFontTransMat(&m[0], &m[1], &m[2], &m[3]);
@@ -2252,15 +2154,6 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
         return;
     }
 
-    drawFont = font;
-    drawCode = code;
-    if (uLen == 1 && shouldUseUnicodeFallback(u[0]) && shouldUseUnicodeFallbackForFont(state->getFont())) {
-        if (SplashFont *fallbackFont = getUnicodeFallbackFont(fontEngine, state, u[0], splash->getMatrix())) {
-            drawFont = fallbackFont;
-            drawCode = u[0];
-        }
-    }
-
     x -= originX;
     y -= originY;
 
@@ -2274,7 +2167,7 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
         splash->setLineWidth(1 / state->getVDPI());
     }
     if (doStroke || doClip) {
-        if ((path = drawFont->getGlyphPath(drawCode))) {
+        if ((path = font->getGlyphPath(code))) {
             path->offset((SplashCoord)x, (SplashCoord)y);
         }
     }
@@ -2300,7 +2193,7 @@ void SplashOutputDev::drawChar(GfxState *state, double x, double y, double /*dx*
         // fill
     } else if (doFill) {
         setOverprintMask(state->getFillColorSpace(), state->getFillOverprint(), state->getOverprintMode(), state->getFillColor());
-        splash->fillChar((SplashCoord)x, (SplashCoord)y, drawCode, drawFont);
+        splash->fillChar((SplashCoord)x, (SplashCoord)y, code, font);
 
         // stroke
     } else if (doStroke) {

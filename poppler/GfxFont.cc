@@ -703,25 +703,11 @@ std::optional<GfxFontLoc> GfxFont::locateFont(XRef *xref, PSOutputDev *ps, GooSt
 
     //----- system font
     if ((path = globalParams->findSystemFontFile(*this, &sysFontType, &fontNum, substituteFontName))) {
-        if (isCIDFont()) {
-            if (sysFontType == sysFontTTF || sysFontType == sysFontTTC) {
-                GfxFontLoc fontLoc;
-                fontLoc.locType = gfxFontLocExternal;
-                fontLoc.fontType = fontCIDType2;
-                fontLoc.path = *path;
-                fontLoc.fontNum = fontNum;
-                return fontLoc;
-            }
-        } else {
-            GfxFontLoc fontLoc;
-            fontLoc.path = *path;
-            fontLoc.locType = gfxFontLocExternal;
-            if (sysFontType == sysFontTTF || sysFontType == sysFontTTC) {
-                fontLoc.fontType = fontTrueType;
-            } else if (sysFontType == sysFontPFA || sysFontType == sysFontPFB) {
-                fontLoc.fontType = fontType1;
-                fontLoc.fontNum = fontNum;
-            }
+        // Resolve the actual font program, just as for explicit/Base14 files.
+        // Platform registries and filename extensions cannot distinguish CFF,
+        // OpenType/CFF and TrueType reliably. Preserve TTC face selection.
+        if (std::optional<GfxFontLoc> fontLoc = getExternalFont(*path, isCIDFont())) {
+            fontLoc->fontNum = fontNum;
             return fontLoc;
         }
     }

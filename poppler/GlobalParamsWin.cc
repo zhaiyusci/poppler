@@ -58,21 +58,21 @@ static const struct
     const char *name;
     const std::vector<std::string> fileNames;
     bool warnIfMissing;
-} displayFontTab[] = { { "Courier", { "n022003l.pfb", "cour.ttf" }, true },
-                       { "Courier-Bold", { "n022004l.pfb", "courbd.ttf" }, true },
-                       { "Courier-BoldOblique", { "n022024l.pfb", "courbi.ttf" }, true },
-                       { "Courier-Oblique", { "n022023l.pfb", "couri.ttf" }, true },
-                       { "Helvetica", { "n019003l.pfb", "arial.ttf" }, true },
-                       { "Helvetica-Bold", { "n019004l.pfb", "arialbd.ttf" }, true },
-                       { "Helvetica-BoldOblique", { "n019024l.pfb", "arialbi.ttf" }, true },
-                       { "Helvetica-Oblique", { "n019023l.pfb", "ariali.ttf" }, true },
-                       { "Symbol", { "s050000l.pfb", "StandardSymbolsPS.otf", "StandardSymbolsPS.ttf" }, true },
-                       { "Times-Bold", { "n021004l.pfb", "timesbd.ttf" }, true },
-                       { "Times-BoldItalic", { "n021024l.pfb", "timesbi.ttf" }, true },
-                       { "Times-Italic", { "n021023l.pfb", "timesi.ttf" }, true },
-                       { "Times-Roman", { "n021003l.pfb", "times.ttf" }, true },
-                       // TODO: not sure if "wingding.ttf" is right
-                       { "ZapfDingbats", { "d050000l.pfb", "wingding.ttf" }, true },
+} displayFontTab[] = { { "Courier", { "FoxitFixed.cff", "n022003l.pfb", "cour.ttf" }, true },
+                       { "Courier-Bold", { "FoxitFixedBold.cff", "n022004l.pfb", "courbd.ttf" }, true },
+                       { "Courier-BoldOblique", { "FoxitFixedBoldItalic.cff", "n022024l.pfb", "courbi.ttf" }, true },
+                       { "Courier-Oblique", { "FoxitFixedItalic.cff", "n022023l.pfb", "couri.ttf" }, true },
+                       { "Helvetica", { "FoxitSans.cff", "n019003l.pfb", "arial.ttf" }, true },
+                       { "Helvetica-Bold", { "FoxitSansBold.cff", "n019004l.pfb", "arialbd.ttf" }, true },
+                       { "Helvetica-BoldOblique", { "FoxitSansBoldItalic.cff", "n019024l.pfb", "arialbi.ttf" }, true },
+                       { "Helvetica-Oblique", { "FoxitSansItalic.cff", "n019023l.pfb", "ariali.ttf" }, true },
+                       { "Symbol", { "FoxitSymbol.cff", "s050000l.pfb", "StandardSymbolsPS.otf", "StandardSymbolsPS.ttf" }, true },
+                       { "Times-Bold", { "FoxitSerifBold.cff", "n021004l.pfb", "timesbd.ttf" }, true },
+                       { "Times-BoldItalic", { "FoxitSerifBoldItalic.cff", "n021024l.pfb", "timesbi.ttf" }, true },
+                       { "Times-Italic", { "FoxitSerifItalic.cff", "n021023l.pfb", "timesi.ttf" }, true },
+                       { "Times-Roman", { "FoxitSerif.cff", "n021003l.pfb", "times.ttf" }, true },
+                       // Wingdings does not implement the PDF ZapfDingbats encoding.
+                       { "ZapfDingbats", { "FoxitDingbats.cff", "d050000l.pfb" }, true },
 
                        // those seem to be frequently accessed by PDF files and I kind of guess
                        // which font file do the refer to
@@ -517,8 +517,14 @@ std::optional<std::string> GlobalParams::findSystemFontFile(const GfxFont &font,
         if (substituteFontName)
             substituteFontName->assign(fi->substituteName->toStr());
     } else {
-        GooString *substFontName = new GooString(findSubstituteName(&font, fontFiles, substFiles, fontName->c_str()));
-        error(errSyntaxError, -1, "Couldn't find a font for '{0:s}', subst is '{1:t}'", fontName->c_str(), substFontName);
+        // Let GfxFont's normal simple-font substitution preserve serif/fixed,
+        // bold and italic attributes instead of forcing every miss to Helvetica.
+        // Explicit cidfmap aliases and collection-aware CID fallback still apply.
+        if (!font.isCIDFont() && substFiles.find(*fontName) == substFiles.end()) {
+            return std::nullopt;
+        }
+        const auto substFontName = std::make_unique<GooString>(findSubstituteName(&font, fontFiles, substFiles, fontName->c_str()));
+        error(errSyntaxError, -1, "Couldn't find a font for '{0:s}', subst is '{1:t}'", fontName->c_str(), substFontName.get());
         const auto fontFile = fontFiles.find(substFontName->toStr());
         if (fontFile != fontFiles.end()) {
             path = fontFile->second;
@@ -533,7 +539,7 @@ std::optional<std::string> GlobalParams::findSystemFontFile(const GfxFont &font,
         }
     }
 
-    return path;
+    return path.empty() ? std::nullopt : std::optional<std::string>(path);
 }
 
 FamilyStyleFontSearchResult GlobalParams::findSystemFontFileForFamilyAndStyle(const std::string &fontFamily, const std::string &fontStyle, const std::vector<std::string> &filesToIgnore)

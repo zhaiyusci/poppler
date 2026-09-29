@@ -138,11 +138,29 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 static std::string get_poppler_localdir(const std::string &suffix)
 {
     const std::string binSuffix("\\bin");
-    std::string retval(MAX_PATH, '\0');
-
-    if (!GetModuleFileNameA(hmodule, retval.data(), retval.size())) {
+    // Poppler file paths are UTF-8. The ANSI API loses characters in relocated
+    // installation paths and silently makes the bundled fonts unavailable.
+    std::wstring modulePath(MAX_PATH, L'\0');
+    DWORD length = 0;
+    for (;;) {
+        length = GetModuleFileNameW(hmodule, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+        if (!length) {
+            return POPPLER_DATADIR;
+        }
+        if (length < modulePath.size()) {
+            break;
+        }
+        if (modulePath.size() >= 32768) {
+            return POPPLER_DATADIR;
+        }
+        modulePath.resize(modulePath.size() * 2);
+    }
+    const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, modulePath.data(), static_cast<int>(length), nullptr, 0, nullptr, nullptr);
+    if (!bytes) {
         return POPPLER_DATADIR;
     }
+    std::string retval(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, modulePath.data(), static_cast<int>(length), retval.data(), bytes, nullptr, nullptr);
 
     const std::string::size_type p = retval.rfind('\\');
     if (p != std::string::npos) {
@@ -158,14 +176,7 @@ static std::string get_poppler_localdir(const std::string &suffix)
 
 static const char *get_poppler_datadir(void)
 {
-    static std::string retval;
-    static bool beenhere = false;
-
-    if (!beenhere) {
-        retval = get_poppler_localdir("\\share\\poppler");
-        beenhere = true;
-    }
-
+    static const std::string retval = get_poppler_localdir("\\share\\poppler");
     return retval.c_str();
 }
 
@@ -174,14 +185,7 @@ static const char *get_poppler_datadir(void)
 
 static const char *get_poppler_fontsdir(void)
 {
-    static std::string retval;
-    static bool beenhere = false;
-
-    if (!beenhere) {
-        retval = get_poppler_localdir("\\share\\fonts");
-        beenhere = true;
-    }
-
+    static const std::string retval = get_poppler_localdir("\\share\\fonts");
     return retval.c_str();
 }
 #    undef POPPLER_FONTSDIR
