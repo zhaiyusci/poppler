@@ -109,6 +109,15 @@ Result rotatePage(PDFDoc *document, int pageNumber, int rotationDegrees);
 // above. Sizes are default user space units (points) in the page's unrotated
 // axes; a smaller box hides what falls outside it without deleting it.
 Result setPageSize(PDFDoc *document, int pageNumber, double width, double height);
+// Moves each edge of the page's visible box by its own amount, in default user
+// space units (points) in the page's unrotated axes: x1Delta and y1Delta move the
+// lower-left corner, x2Delta and y2Delta the upper-right one. A caller that anchors
+// a corner or an edge passes a zero delta for the edges that must stay, so any
+// anchor works. The page's content keeps its own coordinates; only the box that
+// decides what is visible changes, and the media box grows to keep containing the
+// crop box. A result with no area, or larger than 20000 points per side, is
+// rejected. A smaller box only hides what falls outside it.
+Result adjustPageBox(PDFDoc *document, int pageNumber, double x1Delta, double y1Delta, double x2Delta, double y2Delta);
 // Updates an already-open document without writing it. This lets callers
 // change a named destination and another PDF structure atomically.
 Result setNamedDestination(PDFDoc *document, const std::string &name, int pageNumber, double normalizedX, double normalizedY, NamedDestinationView view = NamedDestinationView::XYZ);

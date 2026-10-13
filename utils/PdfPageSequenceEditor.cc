@@ -1985,11 +1985,11 @@ Result rotatePage(PDFDoc *document, int pageNumber, int rotationDegrees)
     return { Error::None, std::string(), pageCount, pageCount };
 }
 
-Result setPageSize(PDFDoc *document, int pageNumber, double width, double height)
+Result adjustPageBox(PDFDoc *document, int pageNumber, double x1Delta, double y1Delta, double x2Delta, double y2Delta)
 {
     const int pageCount = document ? document->getNumPages() : 0;
-    if (!document || pageNumber < 1 || pageNumber > pageCount || !(width > 0.0) || !(height > 0.0) || width > 20000.0 || height > 20000.0) {
-        return makeError(Error::InvalidArguments, "The page size arguments are invalid.", pageCount);
+    if (!document || pageNumber < 1 || pageNumber > pageCount) {
+        return makeError(Error::InvalidArguments, "The page box arguments are invalid.", pageCount);
     }
     Page *page = document->getPage(pageNumber);
     Ref *pageRef = document->getCatalog()->getPageRef(pageNumber);
@@ -2009,12 +2009,19 @@ Result setPageSize(PDFDoc *document, int pageNumber, double width, double height
         return makeError(Error::PageError, "Could not read the page size.", pageCount);
     }
 
-    // The reader sees the crop box, so that is the box a new size moves. Its
-    // lower-left corner is kept: existing content keeps its coordinates and the
-    // added room appears to the right and above it. Writing both boxes on the
-    // page overrides anything the page tree would contribute, and the media box
-    // is grown when needed because the crop box has to stay inside it.
-    const PDFRectangle newCropBox { cropBox->x1, cropBox->y1, cropBox->x1 + width, cropBox->y1 + height };
+    // A delta per edge lets the caller anchor whatever stays put: pinning the
+    // lower-left corner moves x2 and y2 only, and pinning the top-right corner
+    // moves x1 and y1 only. The page's content keeps its own coordinates, because
+    // only the box that decides what is visible changes. Writing both boxes on the
+    // page overrides anything the page tree would contribute, and the media box is
+    // grown when needed because the crop box has to stay inside it.
+    const PDFRectangle newCropBox { cropBox->x1 + x1Delta, cropBox->y1 + y1Delta, cropBox->x2 + x2Delta, cropBox->y2 + y2Delta };
+    const double newWidth = newCropBox.x2 - newCropBox.x1;
+    const double newHeight = newCropBox.y2 - newCropBox.y1;
+    // The comparisons also reject NaN, which never compares greater than a number.
+    if (!(newWidth > 0.0) || !(newHeight > 0.0) || newWidth > 20000.0 || newHeight > 20000.0) {
+        return makeError(Error::InvalidArguments, "The resulting page size is invalid.", pageCount);
+    }
     const PDFRectangle newMediaBox { std::min(mediaBox->x1, newCropBox.x1), std::min(mediaBox->y1, newCropBox.y1), std::max(mediaBox->x2, newCropBox.x2), std::max(mediaBox->y2, newCropBox.y2) };
 
     Dict *dict = pageObject.getDict();
@@ -2023,6 +2030,22 @@ Result setPageSize(PDFDoc *document, int pageNumber, double width, double height
     document->getXRef()->setModifiedObject(&pageObject, *pageRef);
     document->invalidatePageTreeCache();
     return { Error::None, std::string(), pageCount, pageCount };
+}
+
+Result setPageSize(PDFDoc *document, int pageNumber, double width, double height)
+{
+    const int pageCount = document ? document->getNumPages() : 0;
+    if (!document || pageNumber < 1 || pageNumber > pageCount || !(width > 0.0) || !(height > 0.0) || width > 20000.0 || height > 20000.0) {
+        return makeError(Error::InvalidArguments, "The page size arguments are invalid.", pageCount);
+    }
+    Page *page = document->getPage(pageNumber);
+    const PDFRectangle *cropBox = page ? page->getCropBox() : nullptr;
+    if (!cropBox) {
+        return makeError(Error::PageError, "Could not read the page size.", pageCount);
+    }
+    // Taking a size keeps the lower-left corner, which is the same as moving only
+    // the right and the top edge.
+    return adjustPageBox(document, pageNumber, 0.0, 0.0, width - (cropBox->x2 - cropBox->x1), height - (cropBox->y2 - cropBox->y1));
 }
 
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
