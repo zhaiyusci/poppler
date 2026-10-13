@@ -101,6 +101,14 @@ Result detachPage(PDFDoc *document, int pageNumber, const LivePageStatePtr &stat
 Result attachPageAfter(PDFDoc *document, int pageNumber, const LivePageStatePtr &state);
 Result movePage(PDFDoc *document, int sourcePageNumber, int destinationPageNumber);
 Result rotatePage(PDFDoc *document, int pageNumber, int rotationDegrees);
+// Changes the size of the page's visible box: the crop box when the page has one
+// (its own or inherited) and the media box otherwise. Both boxes are written on
+// the page, which overrides anything inherited, and the media box is grown to
+// contain the crop box as the format requires. The lower-left corner is kept, so
+// existing content stays where it is and the new room appears to the right and
+// above. Sizes are default user space units (points) in the page's unrotated
+// axes; a smaller box hides what falls outside it without deleting it.
+Result setPageSize(PDFDoc *document, int pageNumber, double width, double height);
 // Updates an already-open document without writing it. This lets callers
 // change a named destination and another PDF structure atomically.
 Result setNamedDestination(PDFDoc *document, const std::string &name, int pageNumber, double normalizedX, double normalizedY, NamedDestinationView view = NamedDestinationView::XYZ);

@@ -1985,13 +1985,52 @@ Result rotatePage(PDFDoc *document, int pageNumber, int rotationDegrees)
     return { Error::None, std::string(), pageCount, pageCount };
 }
 
+Result setPageSize(PDFDoc *document, int pageNumber, double width, double height)
+{
+    const int pageCount = document ? document->getNumPages() : 0;
+    if (!document || pageNumber < 1 || pageNumber > pageCount || !(width > 0.0) || !(height > 0.0) || width > 20000.0 || height > 20000.0) {
+        return makeError(Error::InvalidArguments, "The page size arguments are invalid.", pageCount);
+    }
+    Page *page = document->getPage(pageNumber);
+    Ref *pageRef = document->getCatalog()->getPageRef(pageNumber);
+    if (!page || !pageRef) {
+        return makeError(Error::PageError, "Could not read the page to resize.", pageCount);
+    }
+    Object pageObject = document->getXRef()->fetch(*pageRef);
+    if (!pageObject.isDict()) {
+        return makeError(Error::PageError, "Could not read the page dictionary.", pageCount);
+    }
+
+    // Both boxes here are already resolved through the page tree, so an inherited
+    // media or crop box behaves like the page's own.
+    const PDFRectangle *mediaBox = page->getMediaBox();
+    const PDFRectangle *cropBox = page->getCropBox();
+    if (!mediaBox || !cropBox) {
+        return makeError(Error::PageError, "Could not read the page size.", pageCount);
+    }
+
+    // The reader sees the crop box, so that is the box a new size moves. Its
+    // lower-left corner is kept: existing content keeps its coordinates and the
+    // added room appears to the right and above it. Writing both boxes on the
+    // page overrides anything the page tree would contribute, and the media box
+    // is grown when needed because the crop box has to stay inside it.
+    const PDFRectangle newCropBox { cropBox->x1, cropBox->y1, cropBox->x1 + width, cropBox->y1 + height };
+    const PDFRectangle newMediaBox { std::min(mediaBox->x1, newCropBox.x1), std::min(mediaBox->y1, newCropBox.y1), std::max(mediaBox->x2, newCropBox.x2), std::max(mediaBox->y2, newCropBox.y2) };
+
+    Dict *dict = pageObject.getDict();
+    dict->set("MediaBox", makeBoxArray(document->getXRef(), &newMediaBox));
+    dict->set("CropBox", makeBoxArray(document->getXRef(), &newCropBox));
+    document->getXRef()->setModifiedObject(&pageObject, *pageRef);
+    document->invalidatePageTreeCache();
+    return { Error::None, std::string(), pageCount, pageCount };
+}
+
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber)
 {
     PageSequenceEdit edit;
     edit.insertBlankAfter = pageNumber;
     return writePageSequence(inputFileName, outputFileName, std::move(edit));
 }
-
 Result insertBlankPageAfter(const std::string &inputFileName, const std::string &outputFileName, int pageNumber, double width, double height)
 {
     PageSequenceEdit edit;
