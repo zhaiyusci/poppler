@@ -2304,7 +2304,9 @@ static Result editLinkDestination(PDFDoc *document,
                                   double destinationX,
                                   double destinationY,
                                   const std::string &externalUrl,
-                                  bool useExternalUrl)
+                                  bool useExternalUrl,
+                                  const std::string &remoteFileName,
+                                  bool useRemoteFile)
 {
     if (!document) {
         return makeError(Error::InvalidArguments, "The PDF document is not open.");
@@ -2316,7 +2318,12 @@ static Result editLinkDestination(PDFDoc *document,
     if (useExternalUrl && externalUrl.empty()) {
         return makeError(Error::InvalidArguments, "The external link URL is invalid.", pageCount);
     }
-    if (!useExternalUrl && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+    // A remote page belongs to the named file, so this document's page count says
+    // nothing about whether it exists; only that a page was named at all is checked.
+    if (useRemoteFile && (remoteFileName.empty() || destinationPageNumber < 1)) {
+        return makeError(Error::InvalidArguments, "The remote link file or page is invalid.", pageCount);
+    }
+    if (!useExternalUrl && !useRemoteFile && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
         return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
     }
 
@@ -2344,14 +2351,14 @@ static Result editLinkDestination(PDFDoc *document,
     }
 
     Object destination;
-    if (!useExternalUrl && !destinationName.empty()) {
+    if (!useExternalUrl && !useRemoteFile && !destinationName.empty()) {
         const GooString destinationNameString(destinationName);
         const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
         if (!resolved || !resolved->isOk()) {
             return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
         }
         destination = Object(std::string(destinationName));
-    } else if (!useExternalUrl) {
+    } else if (!useExternalUrl && !useRemoteFile) {
         destination = makeXyzDestination(document, destinationPageNumber, destinationX, destinationY);
         if (!destination.isArray()) {
             return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
@@ -2367,6 +2374,23 @@ static Result editLinkDestination(PDFDoc *document,
         auto *action = new Dict(xref);
         action->set("S", Object(objName, "URI"));
         action->set("URI", Object(std::string(externalUrl)));
+        annotationObject.getDict()->remove("Dest");
+        annotationObject.getDict()->set("A", Object(action));
+    } else if (useRemoteFile) {
+        // A cross-file destination carries a page number, not a page reference: a
+        // reference would name a page of this document. The number is zero-based,
+        // and the position is written as it is stored, because there is no page here
+        // to convert a normalized one against.
+        auto *remoteDestination = new Array(xref);
+        remoteDestination->add(Object(destinationPageNumber - 1));
+        remoteDestination->add(Object(objName, "XYZ"));
+        remoteDestination->add(Object(destinationX));
+        remoteDestination->add(Object(destinationY));
+        remoteDestination->add(Object::null());
+        auto *action = new Dict(xref);
+        action->set("S", Object(objName, "GoToR"));
+        action->set("F", Object(std::string(remoteFileName)));
+        action->set("D", Object(remoteDestination));
         annotationObject.getDict()->remove("Dest");
         annotationObject.getDict()->set("A", Object(action));
     } else {
@@ -2393,12 +2417,17 @@ static Result editLinkDestination(PDFDoc *document,
 Result editInternalLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName, int destinationPageNumber, double destinationX,
                                    double destinationY)
 {
-    return editLinkDestination(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false);
+    return editLinkDestination(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false, std::string(), false);
 }
 
 Result editExternalLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url)
 {
-    return editLinkDestination(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true);
+    return editLinkDestination(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true, std::string(), false);
+}
+
+Result editRemoteLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY)
+{
+    return editLinkDestination(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), destinationPageNumber, destinationX, destinationY, std::string(), false, fileName, true);
 }
 
 static Result createLink(PDFDoc *document,
@@ -2412,7 +2441,9 @@ static Result createLink(PDFDoc *document,
                          double destinationX,
                          double destinationY,
                          const std::string &externalUrl,
-                         bool useExternalUrl)
+                         bool useExternalUrl,
+                         const std::string &remoteFileName,
+                         bool useRemoteFile)
 {
     if (!document) {
         return makeError(Error::InvalidArguments, "The PDF document is not open.");
@@ -2424,7 +2455,12 @@ static Result createLink(PDFDoc *document,
     if (useExternalUrl && externalUrl.empty()) {
         return makeError(Error::InvalidArguments, "The external link URL is invalid.", pageCount);
     }
-    if (!useExternalUrl && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
+    // See editLinkDestination: the page named by a remote link is not a page of this
+    // document, so it is not bounded by this document's page count.
+    if (useRemoteFile && (remoteFileName.empty() || destinationPageNumber < 1)) {
+        return makeError(Error::InvalidArguments, "The remote link file or page is invalid.", pageCount);
+    }
+    if (!useExternalUrl && !useRemoteFile && destinationName.empty() && (destinationPageNumber < 1 || destinationPageNumber > pageCount)) {
         return makeError(Error::InvalidArguments, "The destination page is invalid.", pageCount);
     }
 
@@ -2434,14 +2470,14 @@ static Result createLink(PDFDoc *document,
     }
 
     Object destination;
-    if (!useExternalUrl && !destinationName.empty()) {
+    if (!useExternalUrl && !useRemoteFile && !destinationName.empty()) {
         const GooString destinationNameString(destinationName);
         const std::unique_ptr<LinkDest> resolved = document->getCatalog()->findDest(&destinationNameString);
         if (!resolved || !resolved->isOk()) {
             return makeError(Error::InvalidArguments, "The selected named destination does not exist.", pageCount);
         }
         destination = Object(std::string(destinationName));
-    } else if (!useExternalUrl) {
+    } else if (!useExternalUrl && !useRemoteFile) {
         destination = makeXyzDestination(document, destinationPageNumber, destinationX, destinationY);
         if (!destination.isArray()) {
             return makeError(Error::InvalidArguments, "The direct destination position is invalid.", pageCount);
@@ -2467,6 +2503,20 @@ static Result createLink(PDFDoc *document,
         action->set("S", Object(objName, "URI"));
         action->set("URI", Object(std::string(externalUrl)));
         annotationObject.getDict()->set("A", Object(action));
+    } else if (useRemoteFile) {
+        // See editLinkDestination: a cross-file destination is a zero-based page
+        // number in the named file, not a reference into this document.
+        auto *remoteDestination = new Array(document->getXRef());
+        remoteDestination->add(Object(destinationPageNumber - 1));
+        remoteDestination->add(Object(objName, "XYZ"));
+        remoteDestination->add(Object(destinationX));
+        remoteDestination->add(Object(destinationY));
+        remoteDestination->add(Object::null());
+        auto *action = new Dict(document->getXRef());
+        action->set("S", Object(objName, "GoToR"));
+        action->set("F", Object(std::string(remoteFileName)));
+        action->set("D", Object(remoteDestination));
+        annotationObject.getDict()->set("A", Object(action));
     } else {
         annotationObject.getDict()->set("Dest", std::move(destination));
     }
@@ -2487,12 +2537,17 @@ static Result createLink(PDFDoc *document,
 
 Result createInternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName, int destinationPageNumber, double destinationX, double destinationY)
 {
-    return createLink(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false);
+    return createLink(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, destinationName, destinationPageNumber, destinationX, destinationY, std::string(), false, std::string(), false);
 }
 
 Result createExternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url)
 {
-    return createLink(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true);
+    return createLink(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), 0, 0.0, 0.0, url, true, std::string(), false);
+}
+
+Result createRemoteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY)
+{
+    return createLink(document, sourcePageNumber, linkLeft, linkTop, linkRight, linkBottom, std::string(), destinationPageNumber, destinationX, destinationY, std::string(), false, fileName, true);
 }
 
 Result editLinkRectangle(PDFDoc *document,
