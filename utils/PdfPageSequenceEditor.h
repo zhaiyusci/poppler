@@ -130,11 +130,16 @@ Result editInternalLinkDestination(PDFDoc *document, int sourcePageNumber, doubl
 Result createInternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &destinationName, int destinationPageNumber, double destinationX, double destinationY);
 Result editExternalLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
 Result createExternalLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &url);
-// A cross-file link names its file and a page inside it. That page number belongs to
-// the other file, so it is neither checked against this document nor turned into a
-// page reference, and the position is written as it is given.
-Result editRemoteLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY);
-Result createRemoteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY);
+// A cross-file link names its file and a destination inside it: either a page with a
+// position on it, or a named destination of that other file. Both belong to the other
+// file, so neither is checked against this document; a page is written as the plain
+// number the format stores instead of a page reference, and a position is written as it
+// is given. When remoteDestinationName is not empty it is written as the name string and
+// destinationPageNumber and the position are ignored, because the name already decides
+// where in the other file the link lands. "Not empty" therefore means "use the name", as
+// that is the only thing an empty page number could not otherwise express.
+Result editRemoteLinkDestination(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY, const std::string &remoteDestinationName = std::string());
+Result createRemoteLink(PDFDoc *document, int sourcePageNumber, double linkLeft, double linkTop, double linkRight, double linkBottom, const std::string &fileName, int destinationPageNumber, double destinationX, double destinationY, const std::string &remoteDestinationName = std::string());
 Result editLinkRectangle(PDFDoc *document,
                          int sourcePageNumber,
                          double oldLinkLeft,
